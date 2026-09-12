@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
+from google.genai import types
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
@@ -37,7 +38,8 @@ def obtener_embedding(texto: str):
         try:
             res = ai_client.models.embed_content(
                 model=modelo,
-                contents=texto
+                contents=texto,
+                config=types.EmbedContentConfig(output_dimensionality=1024)
             )
             
             if hasattr(res, 'embeddings') and res.embeddings:
