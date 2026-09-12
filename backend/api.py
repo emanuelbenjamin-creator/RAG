@@ -6,12 +6,10 @@ from pydantic import BaseModel
 from google import genai
 from supabase import create_client
 
-# 1. Credenciales de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 2. Inicialización de app y clientes
 app = FastAPI(title="API Asistente Tributario SUNAT")
 
 app.add_middleware(
@@ -29,13 +27,12 @@ class ConsultaRequest(BaseModel):
     pregunta: str
     razonamiento: bool = False
 
-# 3. Función con cascada de recuperación para embeddings
 def obtener_embedding(texto: str):
+    # Nombres de modelos extraídos directamente de tu diagnóstico en Render
     modelos_candidatos = [
-        "text-embedding-004",
-        "embedding-001",
-        "models/text-embedding-004",
-        "models/embedding-001"
+        "gemini-embedding-001",
+        "gemini-embedding-2",
+        "text-embedding-004"
     ]
     
     for modelo in modelos_candidatos:
@@ -44,7 +41,6 @@ def obtener_embedding(texto: str):
                 model=modelo,
                 contents=texto
             )
-            # Extraer los valores vectoriales según el atributo devuelto
             if hasattr(res, 'embedding') and res.embedding:
                 return list(res.embedding.values)
             elif hasattr(res, 'embeddings') and res.embeddings:
@@ -53,24 +49,13 @@ def obtener_embedding(texto: str):
             print(f"[INFO] Intento fallido con modelo '{modelo}': {e}")
             continue
 
-    # Diagnóstico secundario si fallan los nombres conocidos
-    try:
-        print("\n[DIAGNÓSTICO] Modelos disponibles en esta API Key:")
-        for m in ai_client.models.list():
-            print(f" -> {m.name}")
-    except Exception as list_err:
-        print(f"[DIAGNÓSTICO ERROR] No se pudieron listar los modelos: {list_err}")
-
     raise ValueError("Ningún modelo de embedding respondió correctamente con la API Key configurada.")
 
-# 4. Endpoint principal
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
-        # Generar embedding vectorial
         query_vector = obtener_embedding(consulta.pregunta)
 
-        # Consultar Supabase
         response = supabase.rpc(
             "match_documentos",
             {
@@ -94,7 +79,6 @@ Pregunta del usuario: {consulta.pregunta}
 Respuesta clara y precisa:
 """
 
-        # Respuesta final con modelo Flash
         respuesta = ai_client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt_final
