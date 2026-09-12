@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
+from google.genai import types
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
@@ -28,28 +29,29 @@ class ConsultaRequest(BaseModel):
     razonamiento: bool = False
 
 def obtener_embedding(texto: str):
-    # Nombres de modelos extraídos directamente de tu diagnóstico en Render
     modelos_candidatos = [
         "gemini-embedding-001",
-        "gemini-embedding-2",
-        "text-embedding-004"
+        "gemini-embedding-2"
     ]
     
     for modelo in modelos_candidatos:
         try:
+            # Forzar exactitud a 1024 dimensiones que requiere Supabase
             res = ai_client.models.embed_content(
                 model=modelo,
-                contents=texto
+                contents=texto,
+                config=types.EmbedContentConfig(output_dimensionality=1024)
             )
-            if hasattr(res, 'embedding') and res.embedding:
-                return list(res.embedding.values)
-            elif hasattr(res, 'embeddings') and res.embeddings:
+            
+            if hasattr(res, 'embeddings') and res.embeddings:
                 return list(res.embeddings[0].values)
+            elif hasattr(res, 'embedding') and res.embedding:
+                return list(res.embedding.values)
         except Exception as e:
             print(f"[INFO] Intento fallido con modelo '{modelo}': {e}")
             continue
 
-    raise ValueError("Ningún modelo de embedding respondió correctamente con la API Key configurada.")
+    raise ValueError("No se pudo generar el embedding de 1024 dimensiones.")
 
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
