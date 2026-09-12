@@ -1,4 +1,5 @@
 import os
+import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,18 +25,26 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 class ConsultaRequest(BaseModel):
     pregunta: str
+    razonamiento: bool = False
 
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
-        # Generar embedding ligero con la API de Gemini
+        # 1. Generar embedding con Gemini
         embed_response = ai_client.models.embed_content(
             model="text-embedding-004",
             contents=consulta.pregunta
         )
-        query_vector = embed_response.embedding.values
+        
+        # Extraer vector con respaldo de formato
+        if hasattr(embed_response, 'embedding') and embed_response.embedding:
+            query_vector = list(embed_response.embedding.values)
+        elif hasattr(embed_response, 'embeddings') and embed_response.embeddings:
+            query_vector = list(embed_response.embeddings[0].values)
+        else:
+            raise ValueError("No se pudo extraer el vector de embedding de la respuesta.")
 
-        # Búsqueda vectorial en Supabase
+        # 2. Búsqueda vectorial en Supabase
         response = supabase.rpc(
             "match_documentos",
             {
@@ -47,6 +56,7 @@ def responder_consulta(consulta: ConsultaRequest):
 
         contexto = "\n\n".join([doc["contenido"] for doc in response.data]) if response.data else "No hay contexto relevante disponible."
 
+        # 3. Prompt RAG
         prompt_final = f"""
 Eres un Asistente IA experto en normativa tributaria peruana (SUNAT).
 Responde a la pregunta del usuario únicamente con la información dada en el contexto.
@@ -59,7 +69,7 @@ Pregunta del usuario: {consulta.pregunta}
 Respuesta clara y precisa:
 """
 
-        # Generación de respuesta con modelo estándar
+        # 4. Generar respuesta con Gemini
         respuesta = ai_client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt_final
@@ -68,4 +78,7 @@ Respuesta clara y precisa:
         return {"respuesta": respuesta.text}
 
     except Exception as e:
+        print("\n=== ERROR DETECTADO EN /api/chat ===")
+        traceback.print_exc()
+        print("====================================\n")
         raise HTTPException(status_code=500, detail=str(e))
