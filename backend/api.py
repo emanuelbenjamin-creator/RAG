@@ -5,15 +5,12 @@ from pydantic import BaseModel
 from google import genai
 from supabase import create_client
 
-# 1. Configuración de credenciales desde variables de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 2. Inicializar clientes
 app = FastAPI(title="API Asistente Tributario SUNAT")
 
-# Configurar CORS para permitir peticiones desde el frontend (Vercel/Local)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,22 +22,20 @@ app.add_middleware(
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 3. Definir el formato de la petición esperada
 class ConsultaRequest(BaseModel):
     pregunta: str
 
-# 4. Crear el Endpoint de consulta
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
-        # Generar embedding ligero usando la API de Gemini (0% consumo de RAM)
+        # Generar embedding ligero con la API de Gemini
         embed_response = ai_client.models.embed_content(
             model="text-embedding-004",
             contents=consulta.pregunta
         )
-        query_vector = embed_response.embeddings[0].values
+        query_vector = embed_response.embedding.values
 
-        # Recuperar fragmentos desde Supabase
+        # Búsqueda vectorial en Supabase
         response = supabase.rpc(
             "match_documentos",
             {
@@ -50,10 +45,8 @@ def responder_consulta(consulta: ConsultaRequest):
             }
         ).execute()
 
-        # Unificar contexto recuperado
         contexto = "\n\n".join([doc["contenido"] for doc in response.data]) if response.data else "No hay contexto relevante disponible."
 
-        # Prompt estructurado RAG
         prompt_final = f"""
 Eres un Asistente IA experto en normativa tributaria peruana (SUNAT).
 Responde a la pregunta del usuario únicamente con la información dada en el contexto.
@@ -66,9 +59,9 @@ Pregunta del usuario: {consulta.pregunta}
 Respuesta clara y precisa:
 """
 
-        # Generar respuesta con Gemini
+        # Generación de respuesta con modelo estándar
         respuesta = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt_final
         )
 
