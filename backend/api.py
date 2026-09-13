@@ -62,15 +62,18 @@ def responder_consulta(consulta: ConsultaRequest):
     {
         "query_embedding": query_vector,
         "match_threshold": 0.0,
-        "match_count": 40,
+        "match_count": 50,
     }
 ).execute()
 
         contexto = "\n\n".join([doc["contenido"] for doc in response.data]) if response.data else "No hay contexto relevante disponible."
 
         prompt_final = f"""
-Eres un Asistente IA experto en normativa tributaria peruana (SUNAT).
-Responde a la pregunta del usuario únicamente con la información dada en el contexto.
+Eres un Asistente IA experto en comprobantes de pago electrónicos y guías técnicas de SUNAT.
+Responde a la pregunta del usuario utilizando únicamente la información proporcionada en el contexto.
+
+Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
+Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
 
 --- CONTEXTO EXTRAÍDO ---
 {contexto}
