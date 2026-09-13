@@ -58,13 +58,13 @@ def responder_consulta(consulta: ConsultaRequest):
         query_vector = obtener_embedding(consulta.pregunta)
 
         response = supabase.rpc(
-            "match_documentos",
-            {
-                "query_embedding": query_vector,
-                "match_threshold": 0.0,
-                "match_count": 8, # match count 8
-            }
-        ).execute()
+    "match_documentos",
+    {
+        "query_embedding": query_vector,
+        "match_threshold": 0.0,
+        "match_count": 15,  # <-- Cambiar de 8 a 15
+    }
+).execute()
 
         contexto = "\n\n".join([doc["contenido"] for doc in response.data]) if response.data else "No hay contexto relevante disponible."
 
