@@ -62,7 +62,7 @@ def responder_consulta(consulta: ConsultaRequest):
     {
         "query_embedding": query_vector,
         "match_threshold": 0.0,
-        "match_count": 25,
+        "match_count": 40,
     }
 ).execute()
 
