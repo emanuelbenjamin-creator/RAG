@@ -19,8 +19,8 @@ else:
 
     # 3. Fragmentación (Chunking)
     print("\nStep 2: Fragmentando el texto en chunks...")
-    chunk_size = 500
-    overlap = 50
+    chunk_size = 1200
+    overlap = 200
     chunks = []
     inicio = 0
 

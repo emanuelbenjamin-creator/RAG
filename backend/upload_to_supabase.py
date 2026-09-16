@@ -10,7 +10,7 @@ SUPABASE_KEY = "sb_publishable_L9nLEcA3-9rknBAHlP0GOQ_hCqOH-24"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # 1. Ruta del PDF
-pdf_path = os.path.join("documentos", "documento_prueba.pdf")
+pdf_path = os.path.join(os.path.dirname(__file__), "documentos", "documento_prueba.pdf")
 
 if not os.path.exists(pdf_path):
     print(f"[ERROR] No se encontró el archivo: {pdf_path}")
@@ -23,8 +23,8 @@ else:
 
     # 2. Fragmentación
     print("Step 2: Fragmentando texto...")
-    chunk_size = 500
-    overlap = 50
+    chunk_size = 1200
+    overlap = 200
     chunks = []
     inicio = 0
 
