@@ -79,18 +79,24 @@ def responder_consulta(consulta: ConsultaRequest):
         confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
 
         prompt_final = f"""
-Eres un Asistente IA experto en comprobantes de pago electrónicos y guías técnicas de SUNAT.
+Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría un colega con experiencia, no como un documento legal.
 Responde a la pregunta del usuario utilizando únicamente la información proporcionada en el contexto.
 
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
 Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
+
+Reglas de estilo para tu respuesta:
+- Escribe en texto plano, en párrafos normales. NO uses markdown: nada de asteriscos para negrita, nada de numerales #, nada de guiones como viñetas salvo que listar algo lo haga mucho más claro.
+- No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma (ej. Ley N° 30057).
+- Ve directo al punto, como si le explicaras a un colega contador, no como si citaras un artículo legal textual.
+- Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración, no como referencia aislada.
 
 --- CONTEXTO EXTRAÍDO ---
 {contexto}
 --- FIN CONTEXTO ---
 
 Pregunta del usuario: {consulta.pregunta}
-Respuesta clara y precisa:
+Respuesta:
 """
 
         respuesta = ai_client.models.generate_content(
