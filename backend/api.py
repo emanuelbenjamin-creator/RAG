@@ -75,7 +75,42 @@ def responder_consulta(consulta: ConsultaRequest):
                              "Estoy ampliando la base de conocimiento continuamente."
             }
 
-        contexto = "\n\n".join([doc["contenido"] for doc in response.data])
+        # --- Expansión con chunks vecinos ---
+        # Una tabla o una idea puede cortarse justo entre dos chunks (ej. salto de
+        # página). Para no perder esa continuación, además de los chunks que
+        # matchearon por similitud, traemos también el chunk anterior y el
+        # siguiente de CADA UNO dentro del mismo documento.
+        chunks_por_id = {d["id"]: d for d in response.data}
+
+        for doc in response.data:
+            metadata = doc.get("metadata") or {}
+            chunk_id = metadata.get("chunk_id")
+            fuente_archivo = metadata.get("fuente_archivo")
+            if chunk_id is None or fuente_archivo is None:
+                continue
+            for vecino_id in (chunk_id - 1, chunk_id + 1):
+                try:
+                    vecino = (
+                        supabase.table("documentos_tributarios")
+                        .select("id, contenido, metadata")
+                        .eq("metadata->>fuente_archivo", fuente_archivo)
+                        .eq("metadata->>chunk_id", str(vecino_id))
+                        .execute()
+                    )
+                    for v in vecino.data:
+                        if v["id"] not in chunks_por_id:
+                            chunks_por_id[v["id"]] = v
+                except Exception:
+                    pass  # si falla traer un vecino, seguimos con lo que ya tenemos
+
+        # Ordenamos por chunk_id para que el contexto se lea en el orden original
+        # del documento, no en el orden aleatorio de similitud.
+        chunks_ordenados = sorted(
+            chunks_por_id.values(),
+            key=lambda d: (d.get("metadata") or {}).get("chunk_id", 0),
+        )
+
+        contexto = "\n\n".join([doc["contenido"] for doc in chunks_ordenados])
         confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
 
         prompt_final = f"""
