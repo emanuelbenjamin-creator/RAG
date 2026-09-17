@@ -187,6 +187,17 @@ Respuesta:
                         time.sleep(espera)
                         continue
                     break  # se acabaron los reintentos para este modelo, prueba el siguiente
+                except genai_errors.ClientError as e:
+                    ultimo_error = e
+                    es_cuota = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+                    if es_cuota:
+                        # Cuota diaria agotada para ESTE modelo específico.
+                        # No tiene caso reintentar el mismo modelo (no se va a
+                        # recuperar en segundos) — pasa directo al siguiente.
+                        print(f"  [WARN] {modelo} sin cuota disponible (429). "
+                              f"Probando el siguiente modelo...")
+                        break
+                    raise  # otro tipo de error del cliente, no lo escondas
             if exito:
                 if modelo != MODELOS_CHAIN[0]:
                     print(f"  [INFO] Se usó el modelo de respaldo: {modelo}")
