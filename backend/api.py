@@ -121,9 +121,10 @@ Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variacio
 Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
 
 Reglas de estilo para tu respuesta:
-- Escribe en texto plano, en párrafos normales. NO uses markdown: nada de asteriscos para negrita, nada de numerales #, nada de guiones como viñetas salvo que listar algo lo haga mucho más claro.
+- Escribe en texto plano, en párrafos normales, como una conversación entre colegas. NO uses markdown (nada de asteriscos, numerales #), NI listas numeradas o con viñetas, aunque el contexto original sí sea una tabla o lista — redacta esa información como oración corrida, usando conectores como "además", "también", "por otro lado", "en cuanto a".
+- Aun así, sé completo y preciso: no sacrifiques ningún dato relevante del contexto por escribir en prosa. Si hay varios ítems obligatorios que mencionar, inclúyelos todos dentro del párrafo, solo que redactados de forma natural en vez de como lista.
 - No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma (ej. Ley N° 30057).
-- Ve directo al punto, como si le explicaras a un colega contador, no como si citaras un artículo legal textual.
+- Ve directo al punto, sin relleno ni frases de cortesía largas al inicio.
 - Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración, no como referencia aislada.
 
 --- CONTEXTO EXTRAÍDO ---
