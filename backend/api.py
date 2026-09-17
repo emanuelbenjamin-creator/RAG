@@ -114,7 +114,7 @@ def responder_consulta(consulta: ConsultaRequest):
         confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
 
         prompt_final = f"""
-Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría un colega con experiencia, no como un documento legal.
+Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría alguien con experiencia, no como un documento legal pero sí exacto.
 Responde a la pregunta del usuario utilizando únicamente la información proporcionada en el contexto.
 
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
