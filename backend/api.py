@@ -89,22 +89,44 @@ def responder_consulta(consulta: ConsultaRequest):
             metadata = doc.get("metadata") or {}
             chunk_id = metadata.get("chunk_id")
             fuente_archivo = metadata.get("fuente_archivo")
-            if chunk_id is None or fuente_archivo is None:
+            section_id = metadata.get("section_id")
+            if fuente_archivo is None:
                 continue
-            for vecino_id in (chunk_id - 1, chunk_id + 1):
+
+            if section_id:
+                # Este chunk es parte de una tabla/lista larga: trae TODOS los
+                # chunks de esa misma sección, sin importar cuántos sean, para
+                # que la tabla llegue completa aunque abarque varios chunks.
                 try:
-                    vecino = (
+                    seccion_completa = (
                         supabase.table("documentos_tributarios")
                         .select("id, contenido, metadata")
                         .eq("metadata->>fuente_archivo", fuente_archivo)
-                        .eq("metadata->>chunk_id", str(vecino_id))
+                        .eq("metadata->>section_id", section_id)
                         .execute()
                     )
-                    for v in vecino.data:
+                    for v in seccion_completa.data:
                         if v["id"] not in chunks_por_id:
                             chunks_por_id[v["id"]] = v
                 except Exception:
-                    pass  # si falla traer un vecino, seguimos con lo que ya tenemos
+                    pass
+            elif chunk_id is not None:
+                # Prosa normal: solo trae el vecino inmediato anterior/siguiente,
+                # por si una idea se corta justo entre dos chunks.
+                for vecino_id in (chunk_id - 1, chunk_id + 1):
+                    try:
+                        vecino = (
+                            supabase.table("documentos_tributarios")
+                            .select("id, contenido, metadata")
+                            .eq("metadata->>fuente_archivo", fuente_archivo)
+                            .eq("metadata->>chunk_id", str(vecino_id))
+                            .execute()
+                        )
+                        for v in vecino.data:
+                            if v["id"] not in chunks_por_id:
+                                chunks_por_id[v["id"]] = v
+                    except Exception:
+                        pass
 
         # Ordenamos por chunk_id para que el contexto se lea en el orden original
         # del documento, no en el orden aleatorio de similitud.
