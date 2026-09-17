@@ -16,7 +16,7 @@ export default function ChatTributario() {
     setLoading(true);
 
     try {
-      const response = await fetch('https://asistente-ia-backend-iiwx.onrender.com/api/chat', {
+      const response = await fetch('https://p01--asistente-ia-tributario--qw7xms7w9jfx.code.run/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
