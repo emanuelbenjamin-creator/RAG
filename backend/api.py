@@ -11,6 +11,16 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Mismo modelo/dimensión que upload_to_supabase.py — NO cambiar sin reindexar todo
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 1024
+
+# Umbral mínimo de similitud para considerar un chunk "relevante".
+# Con match_threshold=0.0 el sistema nunca dice "no lo sé" — ajusta este valor
+# probando con preguntas dentro y fuera de tu dominio cargado.
+MATCH_THRESHOLD = 0.65
+MATCH_COUNT = 8
+
 app = FastAPI(title="API Asistente Tributario SUNAT")
 
 app.add_middleware(
@@ -24,33 +34,24 @@ app.add_middleware(
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
+
 class ConsultaRequest(BaseModel):
     pregunta: str
     razonamiento: bool = False
 
-def obtener_embedding(texto: str):
-    modelos_candidatos = [
-        "gemini-embedding-001",
-        "gemini-embedding-2"
-    ]
-    
-    for modelo in modelos_candidatos:
-        try:
-            res = ai_client.models.embed_content(
-                model=modelo,
-                contents=texto,
-                config=types.EmbedContentConfig(output_dimensionality=1024)
-            )
-            
-            if hasattr(res, 'embeddings') and res.embeddings:
-                return list(res.embeddings[0].values)
-            elif hasattr(res, 'embedding') and res.embedding:
-                return list(res.embedding.values)
-        except Exception as e:
-            print(f"[INFO] Intento fallido con modelo '{modelo}': {e}")
-            continue
 
+def obtener_embedding(texto: str):
+    res = ai_client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=texto,
+        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
+    )
+    if hasattr(res, "embeddings") and res.embeddings:
+        return list(res.embeddings[0].values)
+    elif hasattr(res, "embedding") and res.embedding:
+        return list(res.embedding.values)
     raise ValueError("No se pudo generar el embedding.")
+
 
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
@@ -58,15 +59,24 @@ def responder_consulta(consulta: ConsultaRequest):
         query_vector = obtener_embedding(consulta.pregunta)
 
         response = supabase.rpc(
-    "match_documentos",
-    {
-        "query_embedding": query_vector,
-        "match_threshold": 0.0,
-        "match_count": 50,
-    }
-).execute()
+            "match_documentos",
+            {
+                "query_embedding": query_vector,
+                "match_threshold": MATCH_THRESHOLD,
+                "match_count": MATCH_COUNT,
+            },
+        ).execute()
 
-        contexto = "\n\n".join([doc["contenido"] for doc in response.data]) if response.data else "No hay contexto relevante disponible."
+        # Si no hay nada por encima del umbral, no fuerces una respuesta:
+        # esto es tu garantía anti-alucinación.
+        if not response.data:
+            return {
+                "respuesta": "No tengo información cargada sobre esa norma o tema todavía. "
+                             "Estoy ampliando la base de conocimiento continuamente."
+            }
+
+        contexto = "\n\n".join([doc["contenido"] for doc in response.data])
+        confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
 
         prompt_final = f"""
 Eres un Asistente IA experto en comprobantes de pago electrónicos y guías técnicas de SUNAT.
@@ -85,10 +95,10 @@ Respuesta clara y precisa:
 
         respuesta = ai_client.models.generate_content(
             model="gemini-3.6-flash",
-            contents=prompt_final
+            contents=prompt_final,
         )
 
-        return {"respuesta": respuesta.text}
+        return {"respuesta": respuesta.text, "confianza": round(confianza, 3)}
 
     except Exception as e:
         print("\n=== ERROR DETECTADO EN /api/chat ===")
