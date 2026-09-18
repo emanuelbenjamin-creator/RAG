@@ -138,19 +138,32 @@ def responder_consulta(consulta: ConsultaRequest):
         contexto = "\n\n".join([doc["contenido"] for doc in chunks_ordenados])
         confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
 
+        # Lista de fuentes citadas (deduplicada), para mostrar en el frontend
+        # de dónde salió la información.
+        fuentes_vistas = set()
+        fuentes = []
+        for doc in chunks_ordenados:
+            m = doc.get("metadata") or {}
+            clave = (m.get("fuente"), m.get("categoria"))
+            if clave not in fuentes_vistas and m.get("fuente"):
+                fuentes_vistas.add(clave)
+                fuentes.append({"fuente": m.get("fuente"), "categoria": m.get("categoria")})
+
         prompt_final = f"""
-Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría un colega con experiencia, no como un documento legal.
+Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría alguien con experiencia, no como un documento legal.
 Responde a la pregunta del usuario utilizando únicamente la información proporcionada en el contexto.
 
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
 Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
 
 Reglas de estilo para tu respuesta:
-- Escribe en texto plano, en párrafos normales, como una conversación entre colegas. NO uses markdown (nada de asteriscos, numerales #), NI listas numeradas o con viñetas, aunque el contexto original sí sea una tabla o lista — redacta esa información como oración corrida, usando conectores como "además", "también", "por otro lado", "en cuanto a".
-- Aun así, sé completo y preciso: no sacrifiques ningún dato relevante del contexto por escribir en prosa. Si hay varios ítems obligatorios que mencionar, inclúyelos todos dentro del párrafo, solo que redactados de forma natural en vez de como lista.
+- Estructura la respuesta en secciones claras usando encabezados con ## (por ejemplo: "## ¿Cuándo aplica?", "## Requisitos obligatorios", "## ¿Dónde se tramita?"). Divide el tema en las preguntas que un contador se haría naturalmente al leerlo.
+- Usa **negrita** para resaltar términos clave, montos, plazos, nombres de normas y conceptos importantes dentro del texto.
+- Cuando el contexto tenga una lista de ítems (requisitos, campos, pasos), preséntalos como lista numerada o con viñetas — no los conviertas en un párrafo largo.
+- Aun con esta estructura, mantén el tono cercano y natural, como lo explicaría un  contador, no como un documento legal frío.
 - No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma (ej. Ley N° 30057).
-- Ve directo al punto, sin relleno ni frases de cortesía largas al inicio.
-- Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración, no como referencia aislada.
+- Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración.
+- Sé completo: no omitas ítems obligatorios del contexto por acortar la respuesta.
 
 --- CONTEXTO EXTRAÍDO ---
 {contexto}
@@ -224,9 +237,10 @@ Respuesta:
                 ),
                 "confianza": round(confianza, 3),
                 "degradado": True,
+                "fuentes": fuentes,
             }
 
-        return {"respuesta": respuesta.text, "confianza": round(confianza, 3)}
+        return {"respuesta": respuesta.text, "confianza": round(confianza, 3), "fuentes": fuentes}
 
     except genai_errors.ServerError as e:
         print("\n=== GEMINI SOBRECARGADO (503) TRAS REINTENTOS ===")
