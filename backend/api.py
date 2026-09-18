@@ -160,10 +160,9 @@ Pregunta del usuario: {consulta.pregunta}
 Respuesta:
 """
 
-        # Cadena de modelos: si el principal está saturado (503), cae al siguiente.
-        # La saturación es por modelo específico, así que un modelo distinto
-        # suele responder de inmediato aunque el primero esté con alta demanda.
-        MODELOS_CHAIN = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+        # Cadena de modelos vigentes (septiembre 2026). Si alguno está saturado,
+        # sin cuota, o Google lo retira, cae automáticamente al siguiente.
+        MODELOS_CHAIN = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
 
         respuesta = None
         ultimo_error = None
@@ -190,12 +189,16 @@ Respuesta:
                 except genai_errors.ClientError as e:
                     ultimo_error = e
                     es_cuota = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-                    if es_cuota:
-                        # Cuota diaria agotada para ESTE modelo específico.
-                        # No tiene caso reintentar el mismo modelo (no se va a
-                        # recuperar en segundos) — pasa directo al siguiente.
-                        print(f"  [WARN] {modelo} sin cuota disponible (429). "
-                              f"Probando el siguiente modelo...")
+                    es_no_disponible = (
+                        "404" in str(e)
+                        or "NOT_FOUND" in str(e)
+                        or "no longer available" in str(e)
+                    )
+                    if es_cuota or es_no_disponible:
+                        # Cuota agotada o el modelo ya no existe/fue retirado por
+                        # Google: no tiene caso reintentar, pasa al siguiente.
+                        motivo = "sin cuota (429)" if es_cuota else "ya no disponible (404)"
+                        print(f"  [WARN] {modelo} {motivo}. Probando el siguiente modelo...")
                         break
                     raise  # otro tipo de error del cliente, no lo escondas
             if exito:
