@@ -114,12 +114,62 @@ function renderTextoFormateado(texto) {
 function PantallaCarga() {
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#EEFBF5]">
-      <div className="w-16 h-16 rounded-2xl bg-[#2EB37C] flex items-center justify-center mb-5 animate-pulse shadow-lg shadow-[#2EB37C]/30">
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-          <path d="M9 12l2 2 4-4" />
-          <circle cx="12" cy="12" r="9" />
-        </svg>
-      </div>
+      <style>{`
+        @keyframes mordisco {
+          0%, 100% { transform: translateY(0) rotate(0deg); }
+          50% { transform: translateY(3px) rotate(-4deg); }
+        }
+        @keyframes nuezMenguante {
+          0%, 60% { transform: scale(1); opacity: 1; }
+          80% { transform: scale(0.75); opacity: 0.9; }
+          95%, 100% { transform: scale(0.55); opacity: 0.85; }
+        }
+        @keyframes colaMovimiento {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(6deg); }
+        }
+        .ardilla-cabeza { animation: mordisco 0.9s ease-in-out infinite; transform-origin: 50% 70%; }
+        .ardilla-nuez { animation: nuezMenguante 2.4s ease-in-out infinite; transform-origin: center; }
+        .ardilla-cola { animation: colaMovimiento 1.8s ease-in-out infinite; transform-origin: 20% 90%; }
+      `}</style>
+
+      <svg width="120" height="120" viewBox="0 0 120 120" className="mb-4">
+        {/* Cola */}
+        <path
+          className="ardilla-cola"
+          d="M20 95 C -5 85, -5 40, 30 30 C 50 24, 55 45, 40 55 C 28 63, 30 78, 45 82"
+          fill="none"
+          stroke="#C97B3F"
+          strokeWidth="14"
+          strokeLinecap="round"
+        />
+        {/* Cuerpo */}
+        <ellipse cx="60" cy="82" rx="26" ry="22" fill="#E0925A" />
+        <ellipse cx="60" cy="88" rx="16" ry="12" fill="#F5DCC0" />
+
+        {/* Cabeza + brazos sosteniendo la nuez */}
+        <g className="ardilla-cabeza">
+          <circle cx="62" cy="52" r="24" fill="#E0925A" />
+          <ellipse cx="62" cy="58" rx="13" ry="10" fill="#F5DCC0" />
+          {/* orejas */}
+          <circle cx="46" cy="34" r="7" fill="#E0925A" />
+          <circle cx="78" cy="34" r="7" fill="#E0925A" />
+          {/* ojo */}
+          <circle cx="70" cy="48" r="3" fill="#3A2A1E" />
+          {/* mejilla */}
+          <circle cx="74" cy="58" r="6" fill="#F0C79E" opacity="0.8" />
+          {/* patitas sosteniendo la nuez */}
+          <ellipse cx="58" cy="66" rx="6" ry="5" fill="#E0925A" />
+          <ellipse cx="70" cy="66" rx="6" ry="5" fill="#E0925A" />
+        </g>
+
+        {/* Nuez */}
+        <g className="ardilla-nuez" style={{ transformBox: 'fill-box' }}>
+          <ellipse cx="64" cy="66" rx="9" ry="10" fill="#8C6239" />
+          <path d="M64 57 Q60 66 64 75 Q68 66 64 57" fill="#6B4A2B" opacity="0.6" />
+        </g>
+      </svg>
+
       <p className="text-[#0F2A1D] font-medium mb-3">Cargando asistente...</p>
       <div className="flex gap-1.5">
         <span className="w-2 h-2 rounded-full bg-[#2EB37C] animate-bounce [animation-delay:-0.3s]" />
