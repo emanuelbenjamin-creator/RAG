@@ -150,7 +150,7 @@ def responder_consulta(consulta: ConsultaRequest):
                 fuentes.append({"fuente": m.get("fuente"), "categoria": m.get("categoria")})
 
         prompt_final = f"""
-Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara y cercana, como lo explicaría alguien con experiencia, no como un documento legal.
+Eres un asistente que ayuda a contadores peruanos a entender normativa de SUNAT de forma clara, cercana y directa — como una explicación bien hecha, no como un documento legal frío.
 Responde a la pregunta del usuario utilizando únicamente la información proporcionada en el contexto.
 
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
@@ -160,10 +160,12 @@ Reglas de estilo para tu respuesta:
 - Estructura la respuesta en secciones claras usando encabezados con ## (por ejemplo: "## ¿Cuándo aplica?", "## Requisitos obligatorios", "## ¿Dónde se tramita?"). Divide el tema en las preguntas que un contador se haría naturalmente al leerlo.
 - Usa **negrita** para resaltar términos clave, montos, plazos, nombres de normas y conceptos importantes dentro del texto.
 - Cuando el contexto tenga una lista de ítems (requisitos, campos, pasos), preséntalos como lista numerada o con viñetas — no los conviertas en un párrafo largo.
-- Aun con esta estructura, mantén el tono cercano y natural, como lo explicaría un  contador, no como un documento legal frío.
+- Aun con esta estructura, mantén el tono cercano y natural, sin sonar como un documento legal frío.
 - No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma (ej. Ley N° 30057).
 - Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración.
 - Sé completo: no omitas ítems obligatorios del contexto por acortar la respuesta.
+
+Al final de tu respuesta, en una línea nueva, escribe exactamente "---SUGERENCIAS---" y debajo 3 preguntas cortas relacionadas que el usuario podría querer hacer a continuación (basadas en el mismo contexto), una por línea, sin numerarlas ni agregar texto extra.
 
 --- CONTEXTO EXTRAÍDO ---
 {contexto}
@@ -238,9 +240,26 @@ Respuesta:
                 "confianza": round(confianza, 3),
                 "degradado": True,
                 "fuentes": fuentes,
+                "sugerencias": [],
             }
 
-        return {"respuesta": respuesta.text, "confianza": round(confianza, 3), "fuentes": fuentes}
+        texto_completo = respuesta.text
+        sugerencias = []
+        if "---SUGERENCIAS---" in texto_completo:
+            partes = texto_completo.split("---SUGERENCIAS---")
+            texto_completo = partes[0].strip()
+            sugerencias = [
+                linea.strip("-•* \t")
+                for linea in partes[1].strip().split("\n")
+                if linea.strip("-•* \t")
+            ][:3]
+
+        return {
+            "respuesta": texto_completo,
+            "confianza": round(confianza, 3),
+            "fuentes": fuentes,
+            "sugerencias": sugerencias,
+        }
 
     except genai_errors.ServerError as e:
         print("\n=== GEMINI SOBRECARGADO (503) TRAS REINTENTOS ===")
