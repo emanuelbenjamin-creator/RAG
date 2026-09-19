@@ -140,25 +140,33 @@ def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
-        query_vector = obtener_embedding(consulta.pregunta)
+        # MODIFICADO: en vez de embeber toda la pregunta de una vez,
+        # la descomponemos primero si es compuesta.
+        sub_preguntas = descomponer_pregunta(consulta.pregunta)
 
-        # MODIFICADO: match_count dinámico según complejidad de la pregunta
-        match_count_efectivo = (
-            MATCH_COUNT_COMPUESTA if es_pregunta_compuesta(consulta.pregunta) else MATCH_COUNT
-        )
+        response_data = []
+        ids_vistos = set()
 
-        response = supabase.rpc(
-            "match_documentos",
-            {
-                "query_embedding": query_vector,
-                "match_threshold": MATCH_THRESHOLD,
-                "match_count": match_count_efectivo,
-            },
-        ).execute()
+        for sub_pregunta in sub_preguntas:
+            query_vector = obtener_embedding(sub_pregunta)
+
+            resp_sub = supabase.rpc(
+                "match_documentos",
+                {
+                    "query_embedding": query_vector,
+                    "match_threshold": MATCH_THRESHOLD,
+                    "match_count": MATCH_COUNT,
+                },
+            ).execute()
+
+            for d in (resp_sub.data or []):
+                if d["id"] not in ids_vistos:
+                    ids_vistos.add(d["id"])
+                    response_data.append(d)
 
         # Si no hay nada por encima del umbral, no fuerces una respuesta:
         # esto es tu garantía anti-alucinación.
-        if not response.data:
+        if not response_data:
             return {
                 "respuesta": "No tengo información cargada sobre esa norma o tema todavía. "
                              "Estoy ampliando la base de conocimiento continuamente."
