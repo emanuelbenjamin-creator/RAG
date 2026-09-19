@@ -11,8 +11,8 @@ from google.genai import errors as genai_errors
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SUPABASE_KEY = os.getenv("sb_publishable_L9nLEcA3-9rknBAHlP0GOQ_hCqOH-24")
+GEMINI_API_KEY = os.getenv("AQ.Ab8RN6Ij-fM1gP1cjjiFpzAD8PdeXhpFd0Z_DtK-qS2uB1fc4A")
 
 # Mismo modelo/dimensión que upload_to_supabase.py — NO cambiar sin reindexar todo
 EMBEDDING_MODEL = "gemini-embedding-001"
@@ -24,6 +24,63 @@ EMBEDDING_DIM = 1024
 MATCH_THRESHOLD = 0.65
 MATCH_COUNT = 8
 
+# NUEVO ----------------------------------------------------------------------
+# Preguntas compuestas (piden 2-3 cosas a la vez, o cruzan varios documentos)
+# pierden recall con un top_k fijo de 8: los sub-temas más "centrales" ocupan
+# casi todos los espacios y el sub-tema periférico queda fuera del umbral.
+# Detectamos preguntas largas/con varias interrogantes y les damos más
+# espacio de búsqueda. Es un parche de bajo esfuerzo, no reemplaza una
+# descomposición real de consultas, pero mitiga el problema sin rearquitectura.
+MATCH_COUNT_COMPUESTA = 14
+PALABRAS_UMBRAL_COMPUESTA = 25
+SIGNOS_INTERROGACION_UMBRAL_COMPUESTA = 2
+
+
+def es_pregunta_compuesta(pregunta: str) -> bool:
+    n_palabras = len(pregunta.split())
+    n_signos = pregunta.count("?") + pregunta.count("¿")
+    return n_palabras > PALABRAS_UMBRAL_COMPUESTA or n_signos > SIGNOS_INTERROGACION_UMBRAL_COMPUESTA
+# ------------------------------------------------------------------------------
+# NUEVO ------------------------------------------------------------------
+def descomponer_pregunta(pregunta: str) -> list[str]:
+    """
+    Si la pregunta tiene más de un sub-tema, la parte en sub-preguntas
+    independientes usando el propio Gemini (rápido y barato con un modelo
+    flash-lite). Cada sub-pregunta se embebe y busca por separado, así un
+    sub-tema "periférico" no compite por espacio en el top-k contra un
+    sub-tema "dominante" semánticamente más fuerte.
+    Si la pregunta es simple (1 solo tema), devuelve una lista con la
+    pregunta original sin cambios, para no gastar una llamada extra.
+    """
+    if not es_pregunta_compuesta(pregunta):
+        return [pregunta]
+
+    prompt_descomposicion = f"""Divide la siguiente pregunta en sub-preguntas
+independientes y autocontenidas, una por cada tema o dato distinto que se
+pide. Si la pregunta ya trata un solo tema, devuélvela tal cual, sin dividir.
+Responde SOLO con las sub-preguntas, una por línea, sin numerarlas ni
+agregar texto adicional.
+
+Pregunta: {pregunta}
+
+Sub-preguntas:"""
+
+    try:
+        resp = ai_client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            contents=prompt_descomposicion,
+        )
+        sub_preguntas = [
+            linea.strip("-•* \t0123456789.) ")
+            for linea in resp.text.strip().split("\n")
+            if linea.strip("-•* \t0123456789.) ")
+        ]
+        return sub_preguntas if sub_preguntas else [pregunta]
+    except Exception:
+        # Si falla la descomposición, seguimos con la pregunta original
+        # completa en vez de romper toda la consulta.
+        return [pregunta]
+# ----------------------------------------------------------------------------
 app = FastAPI(title="API Asistente Tributario SUNAT")
 
 app.add_middleware(
@@ -56,17 +113,46 @@ def obtener_embedding(texto: str):
     raise ValueError("No se pudo generar el embedding.")
 
 
+# NUEVO ------------------------------------------------------------------
+def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
+    """
+    Trae todos los chunks de una misma sección/tabla, pero SOLO los marcados
+    como vigentes (o sin el campo 'estado', por compatibilidad con datos
+    reingeridos antes de este cambio). Antes esta función traía TODO lo que
+    compartiera section_id sin distinguir vigencia, lo que mezclaba texto
+    derogado ("TEXTO ANTERIOR") con el vigente en una misma respuesta.
+    """
+    try:
+        res = (
+            supabase.table("documentos_tributarios")
+            .select("id, contenido, metadata")
+            .eq("metadata->>fuente_archivo", fuente_archivo)
+            .eq("metadata->>section_id", section_id)
+            .or_("metadata->>estado.eq.vigente,metadata->>estado.is.null")
+            .execute()
+        )
+        return res.data
+    except Exception:
+        return []
+# ----------------------------------------------------------------------------
+
+
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
         query_vector = obtener_embedding(consulta.pregunta)
+
+        # MODIFICADO: match_count dinámico según complejidad de la pregunta
+        match_count_efectivo = (
+            MATCH_COUNT_COMPUESTA if es_pregunta_compuesta(consulta.pregunta) else MATCH_COUNT
+        )
 
         response = supabase.rpc(
             "match_documentos",
             {
                 "query_embedding": query_vector,
                 "match_threshold": MATCH_THRESHOLD,
-                "match_count": MATCH_COUNT,
+                "match_count": match_count_efectivo,
             },
         ).execute()
 
@@ -90,29 +176,22 @@ def responder_consulta(consulta: ConsultaRequest):
             chunk_id = metadata.get("chunk_id")
             fuente_archivo = metadata.get("fuente_archivo")
             section_id = metadata.get("section_id")
+            estado_doc = metadata.get("estado", "vigente")  # NUEVO
             if fuente_archivo is None:
                 continue
 
             if section_id:
-                # Este chunk es parte de una tabla/lista larga: trae TODOS los
-                # chunks de esa misma sección, sin importar cuántos sean, para
-                # que la tabla llegue completa aunque abarque varios chunks.
-                try:
-                    seccion_completa = (
-                        supabase.table("documentos_tributarios")
-                        .select("id, contenido, metadata")
-                        .eq("metadata->>fuente_archivo", fuente_archivo)
-                        .eq("metadata->>section_id", section_id)
-                        .execute()
-                    )
-                    for v in seccion_completa.data:
-                        if v["id"] not in chunks_por_id:
-                            chunks_por_id[v["id"]] = v
-                except Exception:
-                    pass
+                # MODIFICADO: usa la nueva función que filtra por vigencia
+                for v in traer_seccion_completa_vigente(fuente_archivo, section_id):
+                    if v["id"] not in chunks_por_id:
+                        chunks_por_id[v["id"]] = v
             elif chunk_id is not None:
                 # Prosa normal: solo trae el vecino inmediato anterior/siguiente,
                 # por si una idea se corta justo entre dos chunks.
+                #
+                # NUEVO: solo si el vecino tiene el MISMO estado (vigente/
+                # derogado) que el chunk original, para no coser
+                # accidentalmente un párrafo vigente con uno derogado.
                 for vecino_id in (chunk_id - 1, chunk_id + 1):
                     try:
                         vecino = (
@@ -120,6 +199,10 @@ def responder_consulta(consulta: ConsultaRequest):
                             .select("id, contenido, metadata")
                             .eq("metadata->>fuente_archivo", fuente_archivo)
                             .eq("metadata->>chunk_id", str(vecino_id))
+                            .or_(
+                                f"metadata->>estado.eq.{estado_doc},"
+                                f"metadata->>estado.is.null"
+                            )
                             .execute()
                         )
                         for v in vecino.data:
@@ -155,6 +238,21 @@ Responde a la pregunta del usuario utilizando únicamente la información propor
 
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
 Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
+
+REGLA CRÍTICA SOBRE VIGENCIA (NUEVO):
+Si el contexto incluye bloques marcados con la frase "TEXTO ANTERIOR", ese contenido es
+normativa DEROGADA (ya no aplica). NUNCA la presentes como vigente ni la mezcles con la
+norma actual como si fuera una sola regla. Usa el texto derogado únicamente si el usuario
+pide explícitamente conocer el historial de cambios o una versión anterior de la norma.
+Si tienes dudas sobre si un fragmento es vigente o derogado, dilo explícitamente en tu
+respuesta en vez de asumir.
+
+REGLA CRÍTICA SOBRE PREGUNTAS COMPUESTAS (NUEVO):
+Si la pregunta del usuario tiene varias partes (por ejemplo, pide dos o tres cosas
+distintas a la vez), responde cada parte por separado y de forma completa. Si el contexto
+no contiene información suficiente para responder alguna de las partes, dilo explícitamente
+para esa parte en vez de omitirla en silencio o responder una pregunta distinta a la que
+se te hizo.
 
 Reglas de estilo para tu respuesta:
 - Estructura la respuesta en secciones claras usando encabezados con ## (por ejemplo: "## ¿Cuándo aplica?", "## Requisitos obligatorios", "## ¿Dónde se tramita?"). Divide el tema en las preguntas que un contador se haría naturalmente al leerlo.
