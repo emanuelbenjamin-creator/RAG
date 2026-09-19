@@ -11,8 +11,8 @@ from google.genai import errors as genai_errors
 from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
-SUPABASE_KEY = os.getenv("sb_publishable_L9nLEcA3-9rknBAHlP0GOQ_hCqOH-24")
-GEMINI_API_KEY = os.getenv("AQ.Ab8RN6Ij-fM1gP1cjjiFpzAD8PdeXhpFd0Z_DtK-qS2uB1fc4A")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Mismo modelo/dimensión que upload_to_supabase.py — NO cambiar sin reindexar todo
 EMBEDDING_MODEL = "gemini-embedding-001"
