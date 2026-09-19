@@ -14,23 +14,28 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# DIAGNÓSTICO: confirma en los logs si la key realmente llegó al contenedor,
+# sin imprimir la key completa. Bórralo una vez resuelto el problema.
+print(f"[DEBUG] GEMINI_API_KEY presente: {bool(GEMINI_API_KEY)}, "
+      f"longitud: {len(GEMINI_API_KEY) if GEMINI_API_KEY else 0}, "
+      f"empieza con: {GEMINI_API_KEY[:6] if GEMINI_API_KEY else 'N/A'}")
+print(f"[DEBUG] SUPABASE_KEY presente: {bool(SUPABASE_KEY)}, "
+      f"longitud: {len(SUPABASE_KEY) if SUPABASE_KEY else 0}")
+
+if not all([SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY]):
+    raise SystemExit(
+        "[ERROR] Faltan variables de entorno: SUPABASE_URL, SUPABASE_KEY o GEMINI_API_KEY. "
+        "Revisa la configuración de Environment variables en Northflank."
+    )
+
 # Mismo modelo/dimensión que upload_to_supabase.py — NO cambiar sin reindexar todo
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 1024
 
 # Umbral mínimo de similitud para considerar un chunk "relevante".
-# Con match_threshold=0.0 el sistema nunca dice "no lo sé" — ajusta este valor
-# probando con preguntas dentro y fuera de tu dominio cargado.
 MATCH_THRESHOLD = 0.65
 MATCH_COUNT = 8
 
-# NUEVO ----------------------------------------------------------------------
-# Preguntas compuestas (piden 2-3 cosas a la vez, o cruzan varios documentos)
-# pierden recall con un top_k fijo de 8: los sub-temas más "centrales" ocupan
-# casi todos los espacios y el sub-tema periférico queda fuera del umbral.
-# Detectamos preguntas largas/con varias interrogantes y les damos más
-# espacio de búsqueda. Es un parche de bajo esfuerzo, no reemplaza una
-# descomposición real de consultas, pero mitiga el problema sin rearquitectura.
 MATCH_COUNT_COMPUESTA = 14
 PALABRAS_UMBRAL_COMPUESTA = 25
 SIGNOS_INTERROGACION_UMBRAL_COMPUESTA = 2
@@ -40,18 +45,23 @@ def es_pregunta_compuesta(pregunta: str) -> bool:
     n_palabras = len(pregunta.split())
     n_signos = pregunta.count("?") + pregunta.count("¿")
     return n_palabras > PALABRAS_UMBRAL_COMPUESTA or n_signos > SIGNOS_INTERROGACION_UMBRAL_COMPUESTA
-# ------------------------------------------------------------------------------
-# NUEVO ------------------------------------------------------------------
-def descomponer_pregunta(pregunta: str) -> list[str]:
-    """
-    Si la pregunta tiene más de un sub-tema, la parte en sub-preguntas
-    independientes usando el propio Gemini (rápido y barato con un modelo
-    flash-lite). Cada sub-pregunta se embebe y busca por separado, así un
-    sub-tema "periférico" no compite por espacio en el top-k contra un
-    sub-tema "dominante" semánticamente más fuerte.
-    Si la pregunta es simple (1 solo tema), devuelve una lista con la
-    pregunta original sin cambios, para no gastar una llamada extra.
-    """
+
+
+app = FastAPI(title="API Asistente Tributario SUNAT")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+def descomponer_pregunta(pregunta: str) -> list:
     if not es_pregunta_compuesta(pregunta):
         return [pregunta]
 
@@ -77,22 +87,7 @@ Sub-preguntas:"""
         ]
         return sub_preguntas if sub_preguntas else [pregunta]
     except Exception:
-        # Si falla la descomposición, seguimos con la pregunta original
-        # completa en vez de romper toda la consulta.
         return [pregunta]
-# ----------------------------------------------------------------------------
-app = FastAPI(title="API Asistente Tributario SUNAT")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 class ConsultaRequest(BaseModel):
@@ -113,15 +108,7 @@ def obtener_embedding(texto: str):
     raise ValueError("No se pudo generar el embedding.")
 
 
-# NUEVO ------------------------------------------------------------------
 def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
-    """
-    Trae todos los chunks de una misma sección/tabla, pero SOLO los marcados
-    como vigentes (o sin el campo 'estado', por compatibilidad con datos
-    reingeridos antes de este cambio). Antes esta función traía TODO lo que
-    compartiera section_id sin distinguir vigencia, lo que mezclaba texto
-    derogado ("TEXTO ANTERIOR") con el vigente en una misma respuesta.
-    """
     try:
         res = (
             supabase.table("documentos_tributarios")
@@ -134,14 +121,11 @@ def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
         return res.data
     except Exception:
         return []
-# ----------------------------------------------------------------------------
 
 
 @app.post("/api/chat")
 def responder_consulta(consulta: ConsultaRequest):
     try:
-        # MODIFICADO: en vez de embeber toda la pregunta de una vez,
-        # la descomponemos primero si es compuesta.
         sub_preguntas = descomponer_pregunta(consulta.pregunta)
 
         response_data = []
@@ -164,19 +148,12 @@ def responder_consulta(consulta: ConsultaRequest):
                     ids_vistos.add(d["id"])
                     response_data.append(d)
 
-        # Si no hay nada por encima del umbral, no fuerces una respuesta:
-        # esto es tu garantía anti-alucinación.
         if not response_data:
             return {
                 "respuesta": "No tengo información cargada sobre esa norma o tema todavía. "
                              "Estoy ampliando la base de conocimiento continuamente."
             }
 
-        # --- Expansión con chunks vecinos ---
-        # Una tabla o una idea puede cortarse justo entre dos chunks (ej. salto de
-        # página). Para no perder esa continuación, además de los chunks que
-        # matchearon por similitud, traemos también el chunk anterior y el
-        # siguiente de CADA UNO dentro del mismo documento.
         chunks_por_id = {d["id"]: d for d in response_data}
 
         for doc in response_data:
@@ -184,22 +161,15 @@ def responder_consulta(consulta: ConsultaRequest):
             chunk_id = metadata.get("chunk_id")
             fuente_archivo = metadata.get("fuente_archivo")
             section_id = metadata.get("section_id")
-            estado_doc = metadata.get("estado", "vigente")  # NUEVO
+            estado_doc = metadata.get("estado", "vigente")
             if fuente_archivo is None:
                 continue
 
             if section_id:
-                # MODIFICADO: usa la nueva función que filtra por vigencia
                 for v in traer_seccion_completa_vigente(fuente_archivo, section_id):
                     if v["id"] not in chunks_por_id:
                         chunks_por_id[v["id"]] = v
             elif chunk_id is not None:
-                # Prosa normal: solo trae el vecino inmediato anterior/siguiente,
-                # por si una idea se corta justo entre dos chunks.
-                #
-                # NUEVO: solo si el vecino tiene el MISMO estado (vigente/
-                # derogado) que el chunk original, para no coser
-                # accidentalmente un párrafo vigente con uno derogado.
                 for vecino_id in (chunk_id - 1, chunk_id + 1):
                     try:
                         vecino = (
@@ -219,8 +189,6 @@ def responder_consulta(consulta: ConsultaRequest):
                     except Exception:
                         pass
 
-        # Ordenamos por chunk_id para que el contexto se lea en el orden original
-        # del documento, no en el orden aleatorio de similitud.
         chunks_ordenados = sorted(
             chunks_por_id.values(),
             key=lambda d: (d.get("metadata") or {}).get("chunk_id", 0),
@@ -229,8 +197,6 @@ def responder_consulta(consulta: ConsultaRequest):
         contexto = "\n\n".join([doc["contenido"] for doc in chunks_ordenados])
         confianza = max((doc.get("similarity", 0) for doc in response_data), default=0)
 
-        # Lista de fuentes citadas (deduplicada), para mostrar en el frontend
-        # de dónde salió la información.
         fuentes_vistas = set()
         fuentes = []
         for doc in chunks_ordenados:
@@ -247,7 +213,7 @@ Responde a la pregunta del usuario utilizando únicamente la información propor
 Toma en cuenta que el texto extraído del PDF puede presentar pequeñas variaciones tipográficas o espaciados irregulares (por ejemplo, "Catálogo No. 14" o "Catálogo N° 14", "e ste", "s e").
 Relaciona los códigos de catálogo (como 1001, 1002, 1003) con sus descripciones de montos (operaciones gravadas, exoneradas, inafectas).
 
-REGLA CRÍTICA SOBRE VIGENCIA (NUEVO):
+REGLA CRÍTICA SOBRE VIGENCIA:
 Si el contexto incluye bloques marcados con la frase "TEXTO ANTERIOR", ese contenido es
 normativa DEROGADA (ya no aplica). NUNCA la presentes como vigente ni la mezcles con la
 norma actual como si fuera una sola regla. Usa el texto derogado únicamente si el usuario
@@ -255,23 +221,21 @@ pide explícitamente conocer el historial de cambios o una versión anterior de 
 Si tienes dudas sobre si un fragmento es vigente o derogado, dilo explícitamente en tu
 respuesta en vez de asumir.
 
-REGLA CRÍTICA SOBRE PREGUNTAS COMPUESTAS (NUEVO):
-Si la pregunta del usuario tiene varias partes (por ejemplo, pide dos o tres cosas
-distintas a la vez), responde cada parte por separado y de forma completa. Si el contexto
-no contiene información suficiente para responder alguna de las partes, dilo explícitamente
-para esa parte en vez de omitirla en silencio o responder una pregunta distinta a la que
-se te hizo.
+REGLA CRÍTICA SOBRE PREGUNTAS COMPUESTAS:
+Si la pregunta del usuario tiene varias partes, responde cada parte por separado y de
+forma completa. Si el contexto no contiene información suficiente para responder alguna
+de las partes, dilo explícitamente para esa parte en vez de omitirla en silencio.
 
 Reglas de estilo para tu respuesta:
-- Estructura la respuesta en secciones claras usando encabezados con ## (por ejemplo: "## ¿Cuándo aplica?", "## Requisitos obligatorios", "## ¿Dónde se tramita?"). Divide el tema en las preguntas que un contador se haría naturalmente al leerlo.
-- Usa **negrita** para resaltar términos clave, montos, plazos, nombres de normas y conceptos importantes dentro del texto.
-- Cuando el contexto tenga una lista de ítems (requisitos, campos, pasos), preséntalos como lista numerada o con viñetas — no los conviertas en un párrafo largo.
-- Aun con esta estructura, mantén el tono cercano y natural, sin sonar como un documento legal frío.
-- No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma (ej. Ley N° 30057).
+- Estructura la respuesta en secciones claras usando encabezados con ## (por ejemplo: "## ¿Cuándo aplica?", "## Requisitos obligatorios", "## ¿Dónde se tramita?").
+- Usa **negrita** para resaltar términos clave, montos, plazos, nombres de normas y conceptos importantes.
+- Cuando el contexto tenga una lista de ítems, preséntalos como lista numerada o con viñetas.
+- Mantén el tono cercano y natural, sin sonar como un documento legal frío.
+- No entrecomilles términos ni definiciones salvo que estés citando el nombre exacto de una norma.
 - Si citas el nombre de una norma o resolución, menciónalo de forma natural dentro de la oración.
 - Sé completo: no omitas ítems obligatorios del contexto por acortar la respuesta.
 
-Al final de tu respuesta, en una línea nueva, escribe exactamente "---SUGERENCIAS---" y debajo 3 preguntas cortas relacionadas que el usuario podría querer hacer a continuación (basadas en el mismo contexto), una por línea, sin numerarlas ni agregar texto extra.
+Al final de tu respuesta, en una línea nueva, escribe exactamente "---SUGERENCIAS---" y debajo 3 preguntas cortas relacionadas, una por línea, sin numerarlas ni agregar texto extra.
 
 --- CONTEXTO EXTRAÍDO ---
 {contexto}
@@ -281,8 +245,6 @@ Pregunta del usuario: {consulta.pregunta}
 Respuesta:
 """
 
-        # Cadena de modelos vigentes (septiembre 2026). Si alguno está saturado,
-        # sin cuota, o Google lo retira, cae automáticamente al siguiente.
         MODELOS_CHAIN = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
 
         respuesta = None
@@ -306,7 +268,7 @@ Respuesta:
                               f"Reintento {intento}/3 en {espera:.1f}s...")
                         time.sleep(espera)
                         continue
-                    break  # se acabaron los reintentos para este modelo, prueba el siguiente
+                    break
                 except genai_errors.ClientError as e:
                     ultimo_error = e
                     es_cuota = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
@@ -315,22 +277,24 @@ Respuesta:
                         or "NOT_FOUND" in str(e)
                         or "no longer available" in str(e)
                     )
+                    es_auth = "401" in str(e) or "UNAUTHENTICATED" in str(e)
+                    if es_auth:
+                        # Un 401 no se arregla probando otro modelo — es la
+                        # key/autenticación. Corta aquí y sube el error real.
+                        print(f"  [ERROR] {modelo}: fallo de autenticación (401). "
+                              f"Revisa GEMINI_API_KEY en las variables de entorno.")
+                        raise
                     if es_cuota or es_no_disponible:
-                        # Cuota agotada o el modelo ya no existe/fue retirado por
-                        # Google: no tiene caso reintentar, pasa al siguiente.
                         motivo = "sin cuota (429)" if es_cuota else "ya no disponible (404)"
                         print(f"  [WARN] {modelo} {motivo}. Probando el siguiente modelo...")
                         break
-                    raise  # otro tipo de error del cliente, no lo escondas
+                    raise
             if exito:
                 if modelo != MODELOS_CHAIN[0]:
                     print(f"  [INFO] Se usó el modelo de respaldo: {modelo}")
                 break
 
         if respuesta is None:
-            # Los 3 modelos fallaron: en vez de un error, devolvemos el contexto
-            # crudo que sí logramos recuperar de Supabase. Menos pulido, pero
-            # sigue siendo información real y útil para el usuario.
             print(f"  [WARN] Los 3 modelos fallaron. Devolviendo contexto crudo. "
                   f"Último error: {ultimo_error}")
             resumen_crudo = "\n\n".join(
@@ -366,6 +330,20 @@ Respuesta:
             "fuentes": fuentes,
             "sugerencias": sugerencias,
         }
+
+    except genai_errors.ClientError as e:
+        if "401" in str(e) or "UNAUTHENTICATED" in str(e):
+            print("\n=== FALLO DE AUTENTICACIÓN CON GEMINI (401) ===")
+            traceback.print_exc()
+            print("====================================\n")
+            raise HTTPException(
+                status_code=500,
+                detail="Error de autenticación con Gemini. Verifica GEMINI_API_KEY en Northflank.",
+            )
+        print("\n=== ERROR DETECTADO EN /api/chat ===")
+        traceback.print_exc()
+        print("====================================\n")
+        raise HTTPException(status_code=500, detail=str(e))
 
     except genai_errors.ServerError as e:
         print("\n=== GEMINI SOBRECARGADO (503) TRAS REINTENTOS ===")
