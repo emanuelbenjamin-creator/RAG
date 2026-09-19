@@ -177,9 +177,9 @@ def responder_consulta(consulta: ConsultaRequest):
         # página). Para no perder esa continuación, además de los chunks que
         # matchearon por similitud, traemos también el chunk anterior y el
         # siguiente de CADA UNO dentro del mismo documento.
-        chunks_por_id = {d["id"]: d for d in response.data}
+        chunks_por_id = {d["id"]: d for d in response_data}
 
-        for doc in response.data:
+        for doc in response_data:
             metadata = doc.get("metadata") or {}
             chunk_id = metadata.get("chunk_id")
             fuente_archivo = metadata.get("fuente_archivo")
@@ -227,7 +227,7 @@ def responder_consulta(consulta: ConsultaRequest):
         )
 
         contexto = "\n\n".join([doc["contenido"] for doc in chunks_ordenados])
-        confianza = max((doc.get("similarity", 0) for doc in response.data), default=0)
+        confianza = max((doc.get("similarity", 0) for doc in response_data), default=0)
 
         # Lista de fuentes citadas (deduplicada), para mostrar en el frontend
         # de dónde salió la información.
