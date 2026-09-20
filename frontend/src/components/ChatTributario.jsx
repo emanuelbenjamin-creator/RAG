@@ -115,62 +115,47 @@ function PantallaCarga() {
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#EEFBF5]">
       <style>{`
-        @keyframes mordisco {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(3px) rotate(-4deg); }
+        @keyframes apilar {
+          0%   { transform: translateY(-26px); opacity: 0; }
+          22%  { transform: translateY(0);     opacity: 1; }
+          82%  { transform: translateY(0);     opacity: 1; }
+          100% { transform: translateY(0);     opacity: 0; }
         }
-        @keyframes nuezMenguante {
-          0%, 60% { transform: scale(1); opacity: 1; }
-          80% { transform: scale(0.75); opacity: 0.9; }
-          95%, 100% { transform: scale(0.55); opacity: 0.85; }
-        }
-        @keyframes colaMovimiento {
-          0%, 100% { transform: rotate(0deg); }
-          50% { transform: rotate(6deg); }
-        }
-        .ardilla-cabeza { animation: mordisco 0.9s ease-in-out infinite; transform-origin: 50% 70%; }
-        .ardilla-nuez { animation: nuezMenguante 2.4s ease-in-out infinite; transform-origin: center; }
-        .ardilla-cola { animation: colaMovimiento 1.8s ease-in-out infinite; transform-origin: 20% 90%; }
+        .hoja { animation: apilar 2.4s ease-out infinite; opacity: 0; }
+        .hoja-1 { animation-delay: 0s; }
+        .hoja-2 { animation-delay: 0.35s; }
+        .hoja-3 { animation-delay: 0.7s; }
       `}</style>
 
       <svg width="120" height="120" viewBox="0 0 120 120" className="mb-4">
-        {/* Cola */}
-        <path
-          className="ardilla-cola"
-          d="M20 95 C -5 85, -5 40, 30 30 C 50 24, 55 45, 40 55 C 28 63, 30 78, 45 82"
-          fill="none"
-          stroke="#C97B3F"
-          strokeWidth="14"
-          strokeLinecap="round"
-        />
-        {/* Cuerpo */}
-        <ellipse cx="60" cy="82" rx="26" ry="22" fill="#E0925A" />
-        <ellipse cx="60" cy="88" rx="16" ry="12" fill="#F5DCC0" />
+        {/* Sombra */}
+        <ellipse cx="60" cy="102" rx="34" ry="5" fill="#0F2A1D" opacity="0.08" />
 
-        {/* Cabeza + brazos sosteniendo la nuez */}
-        <g className="ardilla-cabeza">
-          <circle cx="62" cy="52" r="24" fill="#E0925A" />
-          <ellipse cx="62" cy="58" rx="13" ry="10" fill="#F5DCC0" />
-          {/* orejas */}
-          <circle cx="46" cy="34" r="7" fill="#E0925A" />
-          <circle cx="78" cy="34" r="7" fill="#E0925A" />
-          {/* ojo */}
-          <circle cx="70" cy="48" r="3" fill="#3A2A1E" />
-          {/* mejilla */}
-          <circle cx="74" cy="58" r="6" fill="#F0C79E" opacity="0.8" />
-          {/* patitas sosteniendo la nuez */}
-          <ellipse cx="58" cy="66" rx="6" ry="5" fill="#E0925A" />
-          <ellipse cx="70" cy="66" rx="6" ry="5" fill="#E0925A" />
+        {/* Hoja de atrás */}
+        <g className="hoja hoja-1">
+          <rect x="26" y="16" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#BFE8D3" strokeWidth="2.5" />
+          <rect x="36" y="22" width="22" height="4" rx="2" fill="#BFE8D3" />
+          <rect x="36" y="30" width="40" height="3" rx="1.5" fill="#E3F5EC" />
         </g>
 
-        {/* Nuez */}
-        <g className="ardilla-nuez" style={{ transformBox: 'fill-box' }}>
-          <ellipse cx="64" cy="66" rx="9" ry="10" fill="#8C6239" />
-          <path d="M64 57 Q60 66 64 75 Q68 66 64 57" fill="#6B4A2B" opacity="0.6" />
+        {/* Hoja del medio */}
+        <g className="hoja hoja-2">
+          <rect x="26" y="34" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#7FD1A8" strokeWidth="2.5" />
+          <rect x="36" y="40" width="22" height="4" rx="2" fill="#7FD1A8" />
+          <rect x="36" y="48" width="40" height="3" rx="1.5" fill="#E3F5EC" />
+        </g>
+
+        {/* Hoja de adelante */}
+        <g className="hoja hoja-3">
+          <rect x="26" y="52" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#2EB37C" strokeWidth="3" />
+          <rect x="36" y="60" width="24" height="5" rx="2.5" fill="#0F2A1D" />
+          <rect x="36" y="71" width="46" height="3.5" rx="1.75" fill="#D3F0E1" />
+          <rect x="36" y="79" width="38" height="3.5" rx="1.75" fill="#D3F0E1" />
+          <rect x="36" y="87" width="30" height="3.5" rx="1.75" fill="#D3F0E1" />
         </g>
       </svg>
 
-      <p className="text-[#0F2A1D] font-medium mb-3">Cargando asistente...</p>
+      <p className="text-[#0F2A1D] font-medium mb-3">Organizando la normativa tributaria...</p>
       <div className="flex gap-1.5">
         <span className="w-2 h-2 rounded-full bg-[#2EB37C] animate-bounce [animation-delay:-0.3s]" />
         <span className="w-2 h-2 rounded-full bg-[#2EB37C] animate-bounce [animation-delay:-0.15s]" />
