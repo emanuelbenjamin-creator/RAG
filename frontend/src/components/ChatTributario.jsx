@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const API_URL = 'https://p01--asistente-ia-tributario--qw7xms7w9jfx.code.run/api/chat';
+// Antes apuntaba a /api/chat (bloqueante). Ahora usa /api/chat/stream, que
+// devuelve la respuesta en tiempo real (Server-Sent Events) en vez de un
+// solo JSON al final.
+const API_STREAM_URL = 'https://p01--asistente-ia-tributario--qw7xms7w9jfx.code.run/api/chat/stream';
 
 const ACCESOS_RAPIDOS = [
   {
@@ -329,31 +332,103 @@ export default function ChatTributario() {
     setChatLog((prev) => [...prev, { remitente: 'usuario', texto: userMessage }]);
     setLoading(true);
 
+    // Mensaje de la IA que se va llenando a medida que llega el streaming.
+    // Mientras texto === '' seguimos mostrando el indicador de "escribiendo"
+    // (ver más abajo, en el render); en cuanto llega el primer pedazo del
+    // stream, el indicador se reemplaza por la burbuja con el texto real.
+    setChatLog((prev) => [...prev, { remitente: 'ia', texto: '', fuentes: [], sugerencias: [] }]);
+
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(API_STREAM_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pregunta: userMessage }),
       });
 
-      const data = await response.json();
+      if (!response.ok || !response.body) {
+        throw new Error('Respuesta no válida del servidor');
+      }
 
-      if (response.ok) {
-        setChatLog((prev) => [
-          ...prev,
-          { remitente: 'ia', texto: data.respuesta, fuentes: data.fuentes, degradado: data.degradado, sugerencias: data.sugerencias },
-        ]);
-      } else {
-        setChatLog((prev) => [
-          ...prev,
-          { remitente: 'ia', texto: 'No pude procesar tu consulta. Intenta de nuevo en unos segundos.', error: true },
-        ]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      // El backend manda eventos SSE: bloques separados por una línea en
+      // blanco, cada uno con una línea "data: {...}". Vamos leyendo el
+      // stream de a pedazos y separando eventos completos del buffer; el
+      // último trozo de cada lectura puede venir incompleto, así que se
+      // guarda para unirlo con el próximo chunk.
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const eventos = buffer.split('\n\n');
+        buffer = eventos.pop();
+
+        for (const bloque of eventos) {
+          const linea = bloque.split('\n').find((l) => l.startsWith('data: '));
+          if (!linea) continue;
+
+          let evento;
+          try {
+            evento = JSON.parse(linea.slice(6));
+          } catch {
+            continue;
+          }
+
+          if (evento.tipo === 'texto') {
+            setChatLog((prev) => {
+              const copia = [...prev];
+              const ultimo = copia[copia.length - 1];
+              copia[copia.length - 1] = { ...ultimo, texto: ultimo.texto + evento.data };
+              return copia;
+            });
+          } else if (evento.tipo === 'fin') {
+            setChatLog((prev) => {
+              const copia = [...prev];
+              const ultimo = copia[copia.length - 1];
+              copia[copia.length - 1] = {
+                ...ultimo,
+                fuentes: evento.data.fuentes || [],
+                sugerencias: evento.data.sugerencias || [],
+                degradado: evento.data.degradado,
+              };
+              return copia;
+            });
+          } else if (evento.tipo === 'error') {
+            setChatLog((prev) => {
+              const copia = [...prev];
+              copia[copia.length - 1] = {
+                remitente: 'ia',
+                texto: 'No pude procesar tu consulta. Intenta de nuevo en unos segundos.',
+                error: true,
+              };
+              return copia;
+            });
+          }
+        }
       }
     } catch (error) {
-      setChatLog((prev) => [
-        ...prev,
-        { remitente: 'ia', texto: 'No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.', error: true },
-      ]);
+      setChatLog((prev) => {
+        const copia = [...prev];
+        const ultimo = copia[copia.length - 1];
+        // Si ya había texto parcial mostrado, lo dejamos y avisamos que se
+        // cortó, en vez de reemplazarlo por el mensaje de error genérico.
+        if (ultimo && ultimo.remitente === 'ia' && ultimo.texto) {
+          copia[copia.length - 1] = {
+            ...ultimo,
+            texto: ultimo.texto + '\n\n_(la respuesta se interrumpió, intenta de nuevo)_',
+          };
+        } else {
+          copia[copia.length - 1] = {
+            remitente: 'ia',
+            texto: 'No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.',
+            error: true,
+          };
+        }
+        return copia;
+      });
     } finally {
       setLoading(false);
     }
@@ -414,14 +489,26 @@ export default function ChatTributario() {
               </div>
             ) : (
               <div className="space-y-6">
-                {chatLog.map((msg, index) =>
-                  msg.remitente === 'usuario' ? (
-                    <div key={index} className="flex justify-end">
-                      <div className="max-w-lg bg-[#2EB37C] text-white px-4 py-2.5 rounded-3xl rounded-br-md shadow-sm">
-                        {msg.texto}
+                {chatLog.map((msg, index) => {
+                  const esUltimoMensaje = index === chatLog.length - 1;
+
+                  if (msg.remitente === 'usuario') {
+                    return (
+                      <div key={index} className="flex justify-end">
+                        <div className="max-w-lg bg-[#2EB37C] text-white px-4 py-2.5 rounded-3xl rounded-br-md shadow-sm">
+                          {msg.texto}
+                        </div>
                       </div>
-                    </div>
-                  ) : (
+                    );
+                  }
+
+                  // Mensaje de la IA todavía sin ningún pedazo de texto: se
+                  // muestra el indicador animado en vez de una burbuja vacía.
+                  if (loading && esUltimoMensaje && !msg.texto) {
+                    return <IndicadorEscribiendo key={index} />;
+                  }
+
+                  return (
                     <div
                       key={index}
                       className={`rounded-3xl p-5 bg-white shadow-sm ${msg.error ? 'text-[#C0523F]' : ''}`}
@@ -435,13 +522,12 @@ export default function ChatTributario() {
                       <Referencias fuentes={msg.fuentes} />
                       <SugerenciasRelacionadas
                         sugerencias={msg.sugerencias}
-                        esUltima={index === chatLog.length - 1}
+                        esUltima={esUltimoMensaje}
                         onElegir={enviarPregunta}
                       />
                     </div>
-                  )
-                )}
-                {loading && <IndicadorEscribiendo />}
+                  );
+                })}
               </div>
             )}
             <div ref={finRef} />
