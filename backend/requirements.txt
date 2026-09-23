@@ -1,5 +1,6 @@
-﻿fastapi
+fastapi
 uvicorn
 supabase
 google-genai
 pypdf
+typesafe-sdk
