@@ -4,3 +4,4 @@ supabase
 google-genai
 pypdf
 typesafe-sdk
+httpx
