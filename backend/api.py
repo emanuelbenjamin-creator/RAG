@@ -5,6 +5,7 @@ import random
 import queue
 import threading
 import traceback
+import requests
 from collections import OrderedDict
 
 import httpx
@@ -18,26 +19,29 @@ from google.genai import errors as genai_errors
 from supabase import create_client
 from typesafe_sdk import TypeSafeClient, Noul
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ekjuoqxmrxrezvcwfnwl.supabase.co")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # sigue usándose SOLO para la generación (LLM)
+VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")  # CAMBIO: nueva, para embeddings de la query
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY")
 
 # [MEJORA 8] Diagnóstico sin exponer ningún fragmento de la key.
 print(f"[DEBUG] GEMINI_API_KEY presente: {bool(GEMINI_API_KEY)}")
+print(f"[DEBUG] VOYAGE_API_KEY presente: {bool(VOYAGE_API_KEY)}")
 print(f"[DEBUG] SUPABASE_KEY presente: {bool(SUPABASE_KEY)}")
 
-if not all([SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY]):
+if not all([SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY, VOYAGE_API_KEY]):
     raise SystemExit(
-        "[ERROR] Faltan variables de entorno: SUPABASE_URL, SUPABASE_KEY o GEMINI_API_KEY. "
-        "Revisa la configuración de Environment variables en Northflank."
+        "[ERROR] Faltan variables de entorno: SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY o "
+        "VOYAGE_API_KEY. Revisa la configuración de Environment variables en Northflank."
     )
 
-# Mismo modelo/dimensión que upload_to_supabase.py — NO cambiar sin reindexar todo
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 1024
+# CAMBIO: embeddings ahora con Voyage. Misma dimensión (1024) que ya usa la
+# tabla en Supabase — NO se toca match_documentos ni el esquema.
+VOYAGE_URL = "https://ai.mongodb.com/v1/embeddings"
+VOYAGE_MODEL = "voyage-4-lite"
+EMBEDDING_DIM = 1024  # sin cambios: default de voyage-4-lite = default anterior de Gemini
 
-# Umbral mínimo de similitud para considerar un chunk "relevante".
 MATCH_THRESHOLD = 0.65
 MATCH_COUNT = 8
 
@@ -45,31 +49,18 @@ MATCH_COUNT_COMPUESTA = 14
 PALABRAS_UMBRAL_COMPUESTA = 25
 SIGNOS_INTERROGACION_UMBRAL_COMPUESTA = 2
 
-# Marcador que separa la respuesta de las sugerencias.
 MARCADOR_SUGERENCIAS = "---SUGERENCIAS---"
 
+# La generación de texto (LLM) sigue en Gemini, sin cambios. Solo el
+# embedding de la query pasó a Voyage.
 MODELOS_CHAIN = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
 
-# ---------------------------------------------------------------------------
-# [MEJORA 1] Fallar rápido: pocos reintentos, backoff corto, timeouts y un
-# tiempo máximo total por consulta. Antes: 3 intentos x 3 modelos con esperas
-# de 2-5 s cada uno.
-# ---------------------------------------------------------------------------
-MAX_INTENTOS_POR_MODELO = 2          # 1 intento + 1 reintento (antes: 3)
-ESPERA_REINTENTO_S = 0.8             # antes: 2**intento + jitter (2-5 s)
-TIMEOUT_LLAMADA_MS = 45_000          # tope por llamada al LLM (en milisegundos)
-TIMEOUT_DESCOMPOSICION_MS = 8_000    # tope para descomponer_pregunta
-DEADLINE_TOTAL_S = 60                # tope total para toda la consulta
+MAX_INTENTOS_POR_MODELO = 2
+ESPERA_REINTENTO_S = 0.8
+TIMEOUT_LLAMADA_MS = 45_000
+TIMEOUT_DESCOMPOSICION_MS = 8_000
+DEADLINE_TOTAL_S = 60
 
-# ---------------------------------------------------------------------------
-# [MEJORA 10] Carrera de modelos en paralelo ("hedging").
-# Se lanza el modelo preferido; si no emite su primer texto en HEDGE_DELAY_S
-# segundos (o falla antes), se lanza el siguiente EN PARALELO sin cancelar el
-# anterior. El primero que emita texto gana y los demás se cancelan.
-#   HEDGE_DELAY_S = 3   -> escalonado (recomendado: gasta menos llamadas)
-#   HEDGE_DELAY_S = 0   -> los 3 modelos a la vez desde el inicio (más rápido,
-#                          pero triplica las llamadas por consulta)
-# ---------------------------------------------------------------------------
 HEDGE_DELAY_S = float(os.getenv("HEDGE_DELAY_S", "3"))
 
 CONFIG_LLM = types.GenerateContentConfig(
@@ -79,12 +70,6 @@ CONFIG_DESCOMPOSICION = types.GenerateContentConfig(
     http_options=types.HttpOptions(timeout=TIMEOUT_DESCOMPOSICION_MS),
 )
 
-# ---------------------------------------------------------------------------
-# [MEJORA 2] Circuit breaker simple: si un modelo dio 503/429/timeout hace
-# poco, se deja para el final de la cadena durante COOLDOWN_MODELO_S segundos.
-# Así las consultas siguientes no pagan el fallo de un modelo que ya se sabe
-# saturado.
-# ---------------------------------------------------------------------------
 COOLDOWN_MODELO_S = 60
 _modelos_saturados: dict = {}
 _saturados_lock = threading.Lock()
@@ -100,16 +85,10 @@ def _modelos_en_orden() -> list:
     with _saturados_lock:
         sanos = [m for m in MODELOS_CHAIN if _modelos_saturados.get(m, 0) <= ahora]
     saturados = [m for m in MODELOS_CHAIN if m not in sanos]
-    return sanos + saturados  # si todos están saturados, se prueban igual
+    return sanos + saturados
 
 
-# ---------------------------------------------------------------------------
-# [MEJORA 3] Caché en memoria (TTL + tamaño máximo) de respuestas completas.
-# Preguntas repetidas se responden al instante y sin gastar llamadas a Gemini
-# ni a Supabase. Solo se guardan respuestas normales (no las degradadas).
-# Se pierde al reiniciar el contenedor, lo cual es aceptable.
-# ---------------------------------------------------------------------------
-CACHE_TTL_S = int(os.getenv("CACHE_TTL_S", "21600"))  # 6 horas
+CACHE_TTL_S = int(os.getenv("CACHE_TTL_S", "21600"))
 CACHE_MAX_ENTRADAS = 200
 _cache: "OrderedDict[str, dict]" = OrderedDict()
 _cache_lock = threading.Lock()
@@ -147,9 +126,6 @@ def es_pregunta_compuesta(pregunta: str) -> bool:
 
 app = FastAPI(title="API Asistente Tributario SUNAT")
 
-# [MEJORA 9] Orígenes configurables por variable de entorno. Por defecto sigue
-# siendo "*" para no romper nada; en Northflank puedes poner
-# ALLOWED_ORIGINS=https://asistributario.turnolibrepe.com
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
 app.add_middleware(
@@ -161,12 +137,10 @@ app.add_middleware(
 )
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+ai_client = genai.Client(api_key=GEMINI_API_KEY)  # sigue usándose solo para generar texto
 
-# TypeSafe (Jev) es OPCIONAL a propósito: si TYPESAFE_API_KEY no está seteada,
-# el filtro de alcance simplemente no se aplica.
 if TYPESAFE_API_KEY:
-    typesafe_client = TypeSafeClient()  # lee TYPESAFE_API_KEY del entorno
+    typesafe_client = TypeSafeClient()
     print("[DEBUG] TYPESAFE_API_KEY presente: filtro de alcance con Jev activado.")
 else:
     typesafe_client = None
@@ -189,18 +163,12 @@ MENSAJE_FUERA_DE_ALCANCE = (
 )
 
 
-# [MEJORA 7] Endpoint liviano para el health check de Northflank.
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
 def es_pregunta_fuera_de_alcance(pregunta: str) -> bool:
-    """
-    Clasifica la pregunta con Jev (TypeSafe) ANTES de tocar Supabase/Gemini.
-    Si TypeSafe no está configurado o falla, se deja pasar la pregunta
-    (falla "abierta").
-    """
     if typesafe_client is None:
         return False
     try:
@@ -239,8 +207,6 @@ Pregunta: {pregunta}
 Sub-preguntas:"""
 
     try:
-        # [MEJORA 1] Timeout corto: si el modelo está saturado, se usa la
-        # pregunta original en vez de dejar al usuario esperando.
         resp = ai_client.models.generate_content(
             model="gemini-3.1-flash-lite",
             contents=prompt_descomposicion,
@@ -262,16 +228,24 @@ class ConsultaRequest(BaseModel):
 
 
 def obtener_embedding(texto: str):
-    res = ai_client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texto,
-        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
-    )
-    if hasattr(res, "embeddings") and res.embeddings:
-        return list(res.embeddings[0].values)
-    elif hasattr(res, "embedding") and res.embedding:
-        return list(res.embedding.values)
-    raise ValueError("No se pudo generar el embedding.")
+    """CAMBIO: antes llamaba a Gemini (embed_content). Ahora llama a Voyage
+    vía MongoDB Atlas, con input_type='query' (distinto de 'document', que es
+    lo que usa upload_to_supabase_voyage.py al indexar) — Voyage optimiza el
+    vector de forma distinta según el rol."""
+    headers = {
+        "Authorization": f"Bearer {VOYAGE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "input": texto,
+        "model": VOYAGE_MODEL,
+        "input_type": "query",
+        "output_dimension": EMBEDDING_DIM,
+    }
+    r = requests.post(VOYAGE_URL, json=body, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return data["data"][0]["embedding"]
 
 
 def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
@@ -290,10 +264,6 @@ def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
 
 
 def _construir_contexto(consulta: ConsultaRequest):
-    """
-    Parte de recuperación (RAG): descompone la pregunta, busca en Supabase,
-    expande secciones/vecinos y arma el prompt final. Sin cambios de lógica.
-    """
     sub_preguntas = descomponer_pregunta(consulta.pregunta)
 
     response_data = []
@@ -419,8 +389,6 @@ Respuesta:
 
 
 def _sse(tipo: str, data) -> str:
-    """Formatea un evento Server-Sent-Events. El frontend debe parsear cada
-    línea 'data: {...}' como JSON con un campo 'tipo'."""
     payload = json.dumps({"tipo": tipo, "data": data}, ensure_ascii=False)
     return f"data: {payload}\n\n"
 
@@ -436,18 +404,6 @@ def _respuesta_degradada(chunks_ordenados) -> str:
 
 
 def _carrera_modelos(prompt_final: str, t0: float):
-    """
-    Corre los modelos de MODELOS_CHAIN en hilos, con hedging, y entrega al
-    consumidor solo los eventos del modelo GANADOR (el primero en emitir texto).
-
-    Eventos que produce (tuplas):
-      ("estado", mensaje)
-      ("chunk", modelo, texto)      solo del ganador
-      ("fin", modelo)               el ganador terminó bien
-      ("error_mid", modelo, exc)    el ganador falló ya empezada la respuesta
-      ("auth", modelo, exc)         error 401 (API key)
-      ("fallaron", ultimo_error)    nadie llegó a emitir texto (o se acabó el tiempo)
-    """
     q = queue.Queue()
     lock = threading.Lock()
     compartido = {"ganador": None}
@@ -497,7 +453,7 @@ def _carrera_modelos(prompt_final: str, t0: float):
                         continue
                     with lock:
                         if compartido["ganador"] is None and not cancelar.is_set():
-                            compartido["ganador"] = modelo  # este modelo gana
+                            compartido["ganador"] = modelo
                         gana = compartido["ganador"] == modelo
                     if not gana:
                         cerrar(stream)
@@ -577,7 +533,6 @@ def _carrera_modelos(prompt_final: str, t0: float):
                 ev = None
 
             if ev is None:
-                # Hedging: nadie ha empezado a responder y ya pasó el tiempo de gracia.
                 if (ganador is None
                         and carrera["lanzados"] < len(orden)
                         and time.monotonic() - carrera["ultimo_lanzamiento"] >= HEDGE_DELAY_S):
@@ -615,23 +570,13 @@ def _carrera_modelos(prompt_final: str, t0: float):
                         yield ("fallaron", ultimo_error)
                         return
     finally:
-        cancelar.set()  # los hilos perdedores (o huérfanos) se detienen solos
+        cancelar.set()
 
 
 def _generar_stream_respuesta(consulta: ConsultaRequest):
-    """
-    Generador SSE. Tipos de evento:
-      - "estado": mensaje de progreso para mostrar mientras se espera.
-      - "texto":  un fragmento más de la respuesta.
-      - "fin":    confianza / fuentes / sugerencias.
-      - "error":  algo falló.
-    [MEJORA 10] La generación usa _carrera_modelos: varios modelos de Gemini
-    compiten y el primero en responder se queda con la respuesta.
-    """
     t0 = time.monotonic()
     clave_cache = _clave_cache(consulta)
 
-    # [MEJORA 3] Caché primero: evita Jev, Supabase y Gemini.
     en_cache = _cache_get(clave_cache)
     if en_cache is not None:
         print("  [INFO] Respuesta servida desde caché.")
@@ -639,7 +584,6 @@ def _generar_stream_respuesta(consulta: ConsultaRequest):
         yield _sse("fin", {**en_cache["fin"], "desde_cache": True})
         return
 
-    # [MEJORA 4] Primer evento inmediato: el usuario ve progreso desde el ms 0.
     yield _sse("estado", "Analizando tu pregunta...")
 
     if es_pregunta_fuera_de_alcance(consulta.pregunta):
@@ -736,7 +680,6 @@ def _generar_stream_respuesta(consulta: ConsultaRequest):
                     "fuentes": fuentes,
                     "sugerencias": sugerencias,
                 }
-                # [MEJORA 3] Guardar en caché solo respuestas normales completas.
                 texto_completo = "".join(partes_texto)
                 if texto_completo:
                     _cache_set(clave_cache, {"texto": texto_completo, "fin": fin})
@@ -759,9 +702,8 @@ def _generar_stream_respuesta(consulta: ConsultaRequest):
                 ultimo_error = ev[1]
                 break
     finally:
-        carrera.close()  # dispara cancelar.set() y detiene los hilos restantes
+        carrera.close()
 
-    # Ningún modelo llegó a emitir texto: modo degradado.
     print(f"  [WARN] Todos los modelos fallaron. Devolviendo contexto crudo. Último error: {ultimo_error}")
     yield _sse("texto", _respuesta_degradada(chunks_ordenados))
     yield _sse("fin", {
@@ -774,11 +716,6 @@ def _generar_stream_respuesta(consulta: ConsultaRequest):
 
 @app.post("/api/chat/stream")
 def responder_consulta_stream(consulta: ConsultaRequest):
-    """
-    Versión en streaming de /api/chat. Devuelve text/event-stream con líneas
-    'data: {"tipo": ..., "data": ...}' donde tipo es "estado", "texto",
-    "fin" o "error".
-    """
     return StreamingResponse(
         _generar_stream_respuesta(consulta),
         media_type="text/event-stream",
