@@ -263,6 +263,33 @@ def traer_seccion_completa_vigente(fuente_archivo: str, section_id: str):
         return []
 
 
+def traer_vecinos_batch(fuente_archivo: str, chunk_ids: list, estado_doc: str):
+    """CAMBIO: reemplaza el loop de una consulta HTTP por cada chunk_id
+    vecino (chunk_id - 1, chunk_id + 1). Antes, por cada chunk relevante se
+    hacían hasta 2 llamadas separadas a Supabase; con preguntas compuestas
+    (varias sub-preguntas, MATCH_COUNT_COMPUESTA=14) esto se convertía en
+    decenas de round-trips secuenciales dentro de una sola petición —
+    un patrón N+1 clásico y la causa más probable del
+    'canceling statement due to statement timeout' visto en producción.
+
+    Ahora se agrupan TODOS los chunk_id vecinos que hacen falta para una
+    misma fuente_archivo y se traen en una sola consulta con .in_()."""
+    if not chunk_ids:
+        return []
+    try:
+        res = (
+            supabase.table("documentos_tributarios")
+            .select("id, contenido, metadata")
+            .eq("metadata->>fuente_archivo", fuente_archivo)
+            .in_("metadata->>chunk_id", [str(c) for c in chunk_ids])
+            .or_(f"metadata->>estado.eq.{estado_doc},metadata->>estado.is.null")
+            .execute()
+        )
+        return res.data
+    except Exception:
+        return []
+
+
 def _construir_contexto(consulta: ConsultaRequest):
     sub_preguntas = descomponer_pregunta(consulta.pregunta)
 
@@ -291,6 +318,14 @@ def _construir_contexto(consulta: ConsultaRequest):
 
     chunks_por_id = {d["id"]: d for d in response_data}
 
+    # CAMBIO: en vez de disparar una consulta por cada chunk_id vecino
+    # dentro de este mismo loop, ahora solo AGRUPAMOS qué hace falta pedir
+    # (por fuente_archivo), y recién después del loop se hacen las consultas
+    # batch — como máximo una por fuente_archivo distinto, sin importar
+    # cuántos vecinos tenga cada una.
+    vecinos_a_pedir = {}   # fuente_archivo -> {"ids": set(), "estado": str}
+    secciones_a_pedir = []  # lista de (fuente_archivo, section_id)
+
     for doc in response_data:
         metadata = doc.get("metadata") or {}
         chunk_id = metadata.get("chunk_id")
@@ -301,28 +336,25 @@ def _construir_contexto(consulta: ConsultaRequest):
             continue
 
         if section_id:
-            for v in traer_seccion_completa_vigente(fuente_archivo, section_id):
-                if v["id"] not in chunks_por_id:
-                    chunks_por_id[v["id"]] = v
+            secciones_a_pedir.append((fuente_archivo, section_id))
         elif chunk_id is not None:
-            for vecino_id in (chunk_id - 1, chunk_id + 1):
-                try:
-                    vecino = (
-                        supabase.table("documentos_tributarios")
-                        .select("id, contenido, metadata")
-                        .eq("metadata->>fuente_archivo", fuente_archivo)
-                        .eq("metadata->>chunk_id", str(vecino_id))
-                        .or_(
-                            f"metadata->>estado.eq.{estado_doc},"
-                            f"metadata->>estado.is.null"
-                        )
-                        .execute()
-                    )
-                    for v in vecino.data:
-                        if v["id"] not in chunks_por_id:
-                            chunks_por_id[v["id"]] = v
-                except Exception:
-                    pass
+            entrada = vecinos_a_pedir.setdefault(
+                fuente_archivo, {"ids": set(), "estado": estado_doc}
+            )
+            entrada["ids"].update([chunk_id - 1, chunk_id + 1])
+
+    # Secciones completas vigentes (sin cambios: ya era una consulta por
+    # sección, no por chunk, así que no había N+1 aquí).
+    for fuente_archivo, section_id in secciones_a_pedir:
+        for v in traer_seccion_completa_vigente(fuente_archivo, section_id):
+            if v["id"] not in chunks_por_id:
+                chunks_por_id[v["id"]] = v
+
+    # Vecinos: ahora en lote, una sola consulta por fuente_archivo.
+    for fuente_archivo, info in vecinos_a_pedir.items():
+        for v in traer_vecinos_batch(fuente_archivo, list(info["ids"]), info["estado"]):
+            if v["id"] not in chunks_por_id:
+                chunks_por_id[v["id"]] = v
 
     chunks_ordenados = sorted(
         chunks_por_id.values(),
