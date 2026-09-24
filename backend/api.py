@@ -18,7 +18,7 @@ from google.genai import errors as genai_errors
 from supabase import create_client
 from typesafe_sdk import TypeSafeClient, Noul
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ilvssohttgguxdijhuyo.supabase.co")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ekjuoqxmrxrezvcwfnwl.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY")
