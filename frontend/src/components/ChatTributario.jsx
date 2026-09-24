@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 // Antes apuntaba a /api/chat (bloqueante). Ahora usa /api/chat/stream, que
 // devuelve la respuesta en tiempo real (Server-Sent Events) en vez de un
 // solo JSON al final.
-const API_STREAM_URL = 'https://p01--asistente-ia-tributario--qw7xms7w9jfx.code.run/api/chat/stream';
+const API_STREAM_URL = 'https://p01--rag--5vhhszvyhlcy.code.run/api/chat/stream';
 
 const ACCESOS_RAPIDOS = [
   {
