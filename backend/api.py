@@ -303,10 +303,12 @@ def _construir_contexto(consulta: ConsultaRequest):
             "match_documentos",
             {
                 "query_embedding": query_vector,
-                "match_threshold": MATCH_THRESHOLD,
+                "match_threshold": 0.0,  # TEMPORAL: para diagnosticar similitudes reales con Voyage
                 "match_count": MATCH_COUNT,
             },
         ).execute()
+        print(f"  [DEBUG] similitudes para '{sub_pregunta}': "
+              f"{[round(d.get('similarity', 0), 3) for d in (resp_sub.data or [])]}")
 
         for d in (resp_sub.data or []):
             if d["id"] not in ids_vistos:
