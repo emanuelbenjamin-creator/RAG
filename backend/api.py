@@ -42,7 +42,10 @@ VOYAGE_URL = "https://ai.mongodb.com/v1/embeddings"
 VOYAGE_MODEL = "voyage-4-lite"
 EMBEDDING_DIM = 1024  # sin cambios: default de voyage-4-lite = default anterior de Gemini
 
-MATCH_THRESHOLD = 0.65
+MATCH_THRESHOLD = 0.5  # CAMBIO: recalibrado tras pasar de Gemini a Voyage para embeddings.
+                        # Con Voyage, similitudes típicas para buenos matches rondan 0.5-0.6
+                        # (antes con Gemini rondaban más alto). 0.65 dejaba fuera resultados
+                        # relevantes. Ajustar si se detectan falsos positivos/negativos.
 MATCH_COUNT = 8
 
 MATCH_COUNT_COMPUESTA = 14
@@ -303,12 +306,10 @@ def _construir_contexto(consulta: ConsultaRequest):
             "match_documentos",
             {
                 "query_embedding": query_vector,
-                "match_threshold": 0.0,  # TEMPORAL: para diagnosticar similitudes reales con Voyage
+                "match_threshold": MATCH_THRESHOLD,
                 "match_count": MATCH_COUNT,
             },
         ).execute()
-        print(f"  [DEBUG] similitudes para '{sub_pregunta}': "
-              f"{[round(d.get('similarity', 0), 3) for d in (resp_sub.data or [])]}")
 
         for d in (resp_sub.data or []):
             if d["id"] not in ids_vistos:
