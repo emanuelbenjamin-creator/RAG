@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { supabase } from './supabaseClient';
+import Auth from './Auth';
 
 // Antes apuntaba a /api/chat (bloqueante). Ahora usa /api/chat/stream, que
 // devuelve la respuesta en tiempo real (Server-Sent Events) en vez de un
@@ -131,24 +133,17 @@ function PantallaCarga() {
       `}</style>
 
       <svg width="120" height="120" viewBox="0 0 120 120" className="mb-4">
-        {/* Sombra */}
         <ellipse cx="60" cy="102" rx="34" ry="5" fill="#0F2A1D" opacity="0.08" />
-
-        {/* Hoja de atrás */}
         <g className="hoja hoja-1">
           <rect x="26" y="16" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#BFE8D3" strokeWidth="2.5" />
           <rect x="36" y="22" width="22" height="4" rx="2" fill="#BFE8D3" />
           <rect x="36" y="30" width="40" height="3" rx="1.5" fill="#E3F5EC" />
         </g>
-
-        {/* Hoja del medio */}
         <g className="hoja hoja-2">
           <rect x="26" y="34" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#7FD1A8" strokeWidth="2.5" />
           <rect x="36" y="40" width="22" height="4" rx="2" fill="#7FD1A8" />
           <rect x="36" y="48" width="40" height="3" rx="1.5" fill="#E3F5EC" />
         </g>
-
-        {/* Hoja de adelante */}
         <g className="hoja hoja-3">
           <rect x="26" y="52" width="68" height="46" rx="7" fill="#FFFFFF" stroke="#2EB37C" strokeWidth="3" />
           <rect x="36" y="60" width="24" height="5" rx="2.5" fill="#0F2A1D" />
@@ -169,7 +164,7 @@ function PantallaCarga() {
 }
 
 /* -------------------- Barra lateral -------------------- */
-function Sidebar({ abierta, onCerrar, historial }) {
+function Sidebar({ abierta, onCerrar, historial, usuario, onSalir }) {
   return (
     <>
       {abierta && (
@@ -221,8 +216,21 @@ function Sidebar({ abierta, onCerrar, historial }) {
           </div>
         </nav>
 
-        <div className="p-3 border-t border-[#E5EFE9] text-xs text-[#9CA8A1]">
-          Las respuestas se basan en la normativa cargada. Verifica siempre la fuente.
+        <div className="p-3 border-t border-[#E5EFE9]">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-xs text-[#5B6B62] truncate" title={usuario}>
+              {usuario}
+            </span>
+            <button
+              onClick={onSalir}
+              className="text-xs text-[#C0523F] hover:underline shrink-0"
+            >
+              Salir
+            </button>
+          </div>
+          <p className="text-xs text-[#9CA8A1]">
+            Las respuestas se basan en la normativa cargada. Verifica siempre la fuente.
+          </p>
         </div>
       </aside>
     </>
@@ -309,11 +317,25 @@ function IndicadorEscribiendo() {
 /* -------------------- Componente principal -------------------- */
 export default function ChatTributario() {
   const [cargandoApp, setCargandoApp] = useState(true);
+  const [sesion, setSesion] = useState(undefined); // undefined = aún no se sabe; null = sin sesión
   const [pregunta, setPregunta] = useState('');
   const [chatLog, setChatLog] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sidebarAbierta, setSidebarAbierta] = useState(false);
   const finRef = useRef(null);
+
+  // CAMBIO: obtiene la sesión actual de Supabase al montar, y se suscribe a
+  // cambios (login, logout, vuelta de Google OAuth) para actualizar la UI
+  // automáticamente sin recargar la página.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSesion(session);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSesion(session);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setCargandoApp(false), 1600);
@@ -324,6 +346,11 @@ export default function ChatTributario() {
     finRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatLog, loading]);
 
+  const cerrarSesion = async () => {
+    await supabase.auth.signOut();
+    setChatLog([]);
+  };
+
   const enviarPregunta = async (texto) => {
     const userMessage = texto.trim();
     if (!userMessage) return;
@@ -331,20 +358,29 @@ export default function ChatTributario() {
     setPregunta('');
     setChatLog((prev) => [...prev, { remitente: 'usuario', texto: userMessage }]);
     setLoading(true);
-
-    // Mensaje de la IA que se va llenando a medida que llega el streaming.
-    // Mientras texto === '' seguimos mostrando el indicador de "escribiendo"
-    // (ver más abajo, en el render); en cuanto llega el primer pedazo del
-    // stream, el indicador se reemplaza por la burbuja con el texto real.
     setChatLog((prev) => [...prev, { remitente: 'ia', texto: '', fuentes: [], sugerencias: [] }]);
 
     try {
+      // CAMBIO: se envía el token de sesión del usuario en el header
+      // Authorization, para que el backend sepa quién pregunta y pueda
+      // rechazar la petición si no hay sesión válida.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('sin_sesion');
+      }
+
       const response = await fetch(API_STREAM_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({ pregunta: userMessage }),
       });
 
+      if (response.status === 401) {
+        throw new Error('sin_sesion');
+      }
       if (!response.ok || !response.body) {
         throw new Error('Respuesta no válida del servidor');
       }
@@ -353,11 +389,6 @@ export default function ChatTributario() {
       const decoder = new TextDecoder();
       let buffer = '';
 
-      // El backend manda eventos SSE: bloques separados por una línea en
-      // blanco, cada uno con una línea "data: {...}". Vamos leyendo el
-      // stream de a pedazos y separando eventos completos del buffer; el
-      // último trozo de cada lectura puede venir incompleto, así que se
-      // guarda para unirlo con el próximo chunk.
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -413,9 +444,13 @@ export default function ChatTributario() {
       setChatLog((prev) => {
         const copia = [...prev];
         const ultimo = copia[copia.length - 1];
-        // Si ya había texto parcial mostrado, lo dejamos y avisamos que se
-        // cortó, en vez de reemplazarlo por el mensaje de error genérico.
-        if (ultimo && ultimo.remitente === 'ia' && ultimo.texto) {
+        if (error.message === 'sin_sesion') {
+          copia[copia.length - 1] = {
+            remitente: 'ia',
+            texto: 'Tu sesión expiró. Vuelve a iniciar sesión para continuar.',
+            error: true,
+          };
+        } else if (ultimo && ultimo.remitente === 'ia' && ultimo.texto) {
           copia[copia.length - 1] = {
             ...ultimo,
             texto: ultimo.texto + '\n\n_(la respuesta se interrumpió, intenta de nuevo)_',
@@ -448,11 +483,21 @@ export default function ChatTributario() {
 
   const preguntasUsuario = chatLog.filter((m) => m.remitente === 'usuario').map((m) => m.texto);
 
-  if (cargandoApp) return <PantallaCarga />;
+  if (cargandoApp || sesion === undefined) return <PantallaCarga />;
+
+  // CAMBIO: sin sesión activa, se muestra la pantalla de login/registro en
+  // vez del chat.
+  if (!sesion) return <Auth />;
 
   return (
     <div className="flex h-screen bg-[#EEFBF5] text-[#0F2A1D] font-sans overflow-hidden">
-      <Sidebar abierta={sidebarAbierta} onCerrar={() => setSidebarAbierta(false)} historial={preguntasUsuario} />
+      <Sidebar
+        abierta={sidebarAbierta}
+        onCerrar={() => setSidebarAbierta(false)}
+        historial={preguntasUsuario}
+        usuario={sesion.user.email}
+        onSalir={cerrarSesion}
+      />
 
       <div className="flex-1 flex flex-col min-w-0">
         <header className="md:hidden flex items-center gap-3 p-4 bg-white border-b border-[#E5EFE9]">
@@ -502,8 +547,6 @@ export default function ChatTributario() {
                     );
                   }
 
-                  // Mensaje de la IA todavía sin ningún pedazo de texto: se
-                  // muestra el indicador animado en vez de una burbuja vacía.
                   if (loading && esUltimoMensaje && !msg.texto) {
                     return <IndicadorEscribiendo key={index} />;
                   }
