@@ -483,6 +483,17 @@ export default function ChatTributario() {
 
   const preguntasUsuario = chatLog.filter((m) => m.remitente === 'usuario').map((m) => m.texto);
 
+  // CAMBIO: nombre a mostrar en el saludo. Con login de Google, Supabase
+  // guarda el nombre completo en user_metadata (full_name o name, según el
+  // caso); con registro por correo no hay nombre, así que usamos la parte
+  // antes de la @ del correo como respaldo más amigable que el correo entero.
+  const nombreUsuario = sesion?.user
+    ? sesion.user.user_metadata?.full_name
+      || sesion.user.user_metadata?.name
+      || sesion.user.email?.split('@')[0]
+      || 'de nuevo'
+    : '';
+
   if (cargandoApp || sesion === undefined) return <PantallaCarga />;
 
   // CAMBIO: sin sesión activa, se muestra la pantalla de login/registro en
@@ -514,7 +525,7 @@ export default function ChatTributario() {
             {chatLog.length === 0 ? (
               <div className="mt-8 md:mt-16">
                 <h1 className="text-2xl md:text-3xl font-semibold text-[#0F2A1D] mb-2">
-                  Hola, ¿en qué te ayudo hoy?
+                  Hola {nombreUsuario}, ¿en qué te ayudo hoy?
                 </h1>
                 <p className="text-[#6B7280] mb-8">
                   Pregunta lo que necesites sobre normativa tributaria peruana, o elige un acceso rápido.
