@@ -484,15 +484,18 @@ export default function ChatTributario() {
   const preguntasUsuario = chatLog.filter((m) => m.remitente === 'usuario').map((m) => m.texto);
 
   // CAMBIO: nombre a mostrar en el saludo. Con login de Google, Supabase
-  // guarda el nombre completo en user_metadata (full_name o name, según el
-  // caso); con registro por correo no hay nombre, así que usamos la parte
-  // antes de la @ del correo como respaldo más amigable que el correo entero.
-  const nombreUsuario = sesion?.user
-    ? sesion.user.user_metadata?.full_name
+  // guarda el nombre en user_metadata (given_name, full_name, o name según
+  // el caso); con registro por correo no hay nombre, así que usamos la
+  // parte antes de la @ del correo como respaldo. Nos quedamos solo con la
+  // primera palabra (sin apellidos).
+  const nombreCompleto = sesion?.user
+    ? sesion.user.user_metadata?.given_name
+      || sesion.user.user_metadata?.full_name
       || sesion.user.user_metadata?.name
       || sesion.user.email?.split('@')[0]
-      || 'de nuevo'
+      || ''
     : '';
+  const nombreUsuario = nombreCompleto.split(' ')[0];
 
   if (cargandoApp || sesion === undefined) return <PantallaCarga />;
 
