@@ -9,7 +9,7 @@ import requests
 from collections import OrderedDict
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -141,6 +141,29 @@ app.add_middleware(
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)  # sigue usándose solo para generar texto
+
+
+def requiere_usuario(authorization: str = Header(default=None)):
+    """CAMBIO: dependency de FastAPI que exige un token válido de Supabase
+    Auth en el header 'Authorization: Bearer <token>'. Se usa en los
+    endpoints de chat para que solo usuarios logueados (con cuenta creada
+    vía email/contraseña o Google) puedan hacer preguntas.
+
+    Devuelve el objeto 'user' de Supabase (con .id, .email, etc.) para que,
+    si quieres, puedas loguear o filtrar por usuario más adelante.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="No autenticado. Inicia sesión para continuar.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        respuesta = supabase.auth.get_user(token)
+        usuario = respuesta.user
+        if usuario is None:
+            raise ValueError("token sin usuario asociado")
+        return usuario
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada. Vuelve a iniciar sesión.")
 
 if TYPESAFE_API_KEY:
     typesafe_client = TypeSafeClient()
@@ -750,7 +773,8 @@ def _generar_stream_respuesta(consulta: ConsultaRequest):
 
 
 @app.post("/api/chat/stream")
-def responder_consulta_stream(consulta: ConsultaRequest):
+def responder_consulta_stream(consulta: ConsultaRequest, usuario=Depends(requiere_usuario)):
+    print(f"  [INFO] Consulta de usuario: {usuario.email} ({usuario.id})")
     return StreamingResponse(
         _generar_stream_respuesta(consulta),
         media_type="text/event-stream",
@@ -762,7 +786,8 @@ def responder_consulta_stream(consulta: ConsultaRequest):
 
 
 @app.post("/api/chat")
-def responder_consulta(consulta: ConsultaRequest):
+def responder_consulta(consulta: ConsultaRequest, usuario=Depends(requiere_usuario)):
+    print(f"  [INFO] Consulta de usuario: {usuario.email} ({usuario.id})")
     try:
         if es_pregunta_fuera_de_alcance(consulta.pregunta):
             return {"respuesta": MENSAJE_FUERA_DE_ALCANCE, "fuera_de_alcance": True}
